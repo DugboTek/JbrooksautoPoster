@@ -1,0 +1,202 @@
+# LinkedIn Post Generator System Design
+
+## System Overview
+
+The LinkedIn Post Generator is a feature within the LinkedIn Automation Platform that allows users to generate, edit, and schedule LinkedIn posts based on article links and topics. The system streamlines the content creation process by automatically generating post variations that users can customize.
+
+## Component Architecture
+
+### Core Components
+
+1. **Dashboard (src/app/dashboard/page.tsx)**
+   - Main application interface
+   - Displays scheduled and posted content
+   - Contains developer controls and feature toggles
+   - Integrates with the PostGenerator component
+
+2. **PostGenerator (src/components/PostGenerator.tsx)**
+   - Form for article link input and topic selection
+   - Displays generated post variations
+   - Provides navigation and editing capabilities for posts
+   - Allows saving posts to the dashboard
+
+3. **UI Components**
+   - ChevronIcons (src/components/icons/ChevronIcons.tsx): Navigation arrows for post cycling
+   - Future components: Modal dialogs, Toast notifications, etc.
+
+### Data Models
+
+1. **Post**
+   - id: string
+   - title: string
+   - content: string
+   - imageUrl?: string
+   - scheduledDate: string
+   - scheduledTime: string
+   - status: 'scheduled' | 'posted' | 'failed'
+   - engagement?: { likes: number, comments: number, shares: number }
+
+2. **Topic**
+   - id: string
+   - label: string
+
+### State Management
+
+1. **Dashboard State**
+   - activeTab: Controls which tab is currently visible
+   - postingStates: Tracks the posting status of individual posts
+   - showScheduleButtons: Toggles visibility of scheduling features
+
+2. **PostGenerator State**
+   - Form State: articleLink, selectedTopic, customTopic, isCustomTopic, isGenerating
+   - Generated Posts State: generatedPosts, currentPostIndex, editedPost, isEditing
+   - Version History State: postHistory, currentPostHistory
+   - AI Editor State: aiEditText, isAiEditOpen, isAnimatingEdit, animatedText, placeholderIndex
+
+## Data Flow and Method Interactions
+
+### Post Generation Flow
+
+1. User enters an article link and selects a topic in the PostGenerator component
+2. User clicks "Generate Posts" button, triggering the handleGeneratePosts method
+3. handleGeneratePosts makes an API call (simulated in current implementation)
+4. Generated posts are stored in the generatedPosts state array
+5. First post is automatically selected (currentPostIndex = 0)
+
+### Post Navigation Flow
+
+1. User clicks navigation arrows to cycle through posts
+2. handlePreviousPost and handleNextPost methods update currentPostIndex
+3. useEffect hook updates editedPost when currentPostIndex changes (if not in editing mode)
+4. UI displays the post at the current index
+
+### Post Editing Flow
+
+1. User clicks the edit button on a post, triggering handleStartEditing
+2. isEditing state is set to true, displaying the editing interface
+3. User edits the post content in the textarea
+4. User can save changes (handleSaveEdit) or cancel (handleCancelEdit)
+5. If saved, the post at the current index in generatedPosts is updated and added to the edit history
+6. User can undo changes by clicking the undo button, which reverts to the previous version from history
+7. User can redo changes by clicking the redo button, which applies a previously undone edit
+
+### AI Post Editing Flow
+
+1. User clicks the AI edit lightning bolt icon in the post header
+2. An animated panel slides open within the post container
+3. User enters an edit instruction in the AI Edit text field
+4. User clicks the AI edit button, triggering the handleAiEdit method
+5. handleAiEdit makes an API call to OpenAI with the current post text and edit instruction
+6. The API returns an edited version of the post
+7. A live editing animation begins, showing characters being backspaced and typed to transform the original text into the edited version
+8. Once the animation completes, the edited post replaces the current post in the generatedPosts array and is added to edit history
+9. The UI displays the fully edited post
+10. User can undo to previous versions by clicking the undo button or redo previously undone changes with the redo button
+
+### Post Saving Flow
+
+1. User clicks "Save to Dashboard" button, triggering handleSavePost
+2. handleSavePost calls the onSavePost callback function with the current post
+3. The Dashboard component adds the post to its displayPosts array
+4. The post appears in the Dashboard UI with scheduled status
+
+## Future Enhancements
+
+1. **API Integration**
+   - Replace sample data with real API calls
+   - Implement authenticated endpoints for post generation and scheduling
+
+2. **User Preferences**
+   - Store trending topics per user in database
+   - Personalize post generation based on user history
+
+3. **Analytics Integration**
+   - Track post performance metrics
+   - Provide insights on optimal posting times and topics
+
+4. **Advanced Editing**
+   - AI-powered editing feature for post enhancement (implemented)
+   - Hashtag recommendations based on topic and content
+   - Image generation for posts
+
+## Implementation Details
+
+### PostGenerator Component
+
+The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
+
+1. **Input Form**
+   - Article link input field
+   - Topic selection dropdown with trending topics
+   - Option to enter a custom topic
+
+2. **Post Generation**
+   - Sends article link and topic to backend
+   - Displays loading state during generation
+   - Shows generated posts once available
+
+3. **Post Navigation**
+   - Left/right arrows to cycle through post variations
+   - Current post counter (e.g., "1/4")
+
+4. **Post Editing**
+   - In-place editing of generated posts
+   - Save/cancel options for edits
+   - Version history tracking for each post
+   - Undo/redo buttons to navigate through edit history with animated transitions
+   - AI Edit feature integrated within the post container with animated reveal
+   - Toggle button in post header to show/hide the AI edit interface
+   - Live text editing animation showing the transition between original and edited content
+   - Blinking cursor effect to enhance the typing animation experience
+   - Rotating placeholder suggestions in the AI Edit input field
+   - Quick edit functionality with auto-processing based on common edit instructions
+
+5. **Post Saving**
+   - Option to save the current post to the dashboard
+   - Integration with parent component via onSavePost callback
+
+## Integration Points
+
+1. **Dashboard Integration**
+   - PostGenerator will be integrated into the Dashboard as a new panel
+   - When a post is saved, it will appear in the posts list on the Dashboard
+   - Scheduled status and timing will be applied to saved posts
+
+2. **API Services (Current & Future)**
+   - Authentication service for user validation
+   - Post generation service for creating post variations
+   - OpenAI API integration for intelligent post editing
+   - Scheduling service for scheduling posts
+   - Analytics service for tracking post performance
+
+## UI/UX Considerations
+
+1. **Responsive Design**
+   - Form and post display adapt to different screen sizes
+   - Mobile-friendly controls and editing interface
+
+2. **User Feedback**
+   - Loading indicators during post generation
+   - Success/error messages for actions
+   - Smooth transitions between posts
+   - Animated text transitions for AI edits to provide visual feedback
+
+3. **Accessibility**
+   - Proper ARIA labels for navigation
+   - Keyboard navigation support
+   - Focus management for editing
+
+## Technical Constraints
+
+1. **Performance**
+   - Limit number of generated posts to prevent overwhelming users
+   - Optimize API calls to reduce generation time
+
+2. **Security**
+   - Validate input URLs to prevent XSS attacks
+   - Implement rate limiting for generation requests
+
+3. **Maintainability**
+   - Clear component boundaries with props interface
+   - Comprehensive documentation
+   - Centralized state management for complex state 

@@ -1,0 +1,49 @@
+Name,Type,Content,Variables
+"LinkedIn Post Generator","System Message - LINKEDIN_WRITER","You are Claude 3.7 Sonnet, a helpful AI assistant that writes engaging LinkedIn posts from the perspective of industry leaders.",none
+"JSON Data Assistant","System Message - JSON_ASSISTANT","You are a helpful assistant that responds with valid JSON only.",none
+"Article Research Assistant","System Message - ARTICLE_RESEARCHER","You are a helpful assistant that researches recent articles and responds with valid JSON only.",none
+"Topic Generator","Topic Generation","Generate a JSON array of exactly 10 trending topics in the ${industry} industry for LinkedIn posts in 2023. 
+
+Each topic should have an ""id"" field (lowercase with hyphens, no spaces) and a ""label"" field (properly capitalized, max 30 chars).
+
+Make sure all topics are relevant to ${industry} and would be suitable for a professional to post about on LinkedIn.
+
+Response format should be EXACTLY: [{""id"":""example-id"",""label"":""Example Label""},...]","industry"
+"Article Search","Article Search","Find 5 recent articles on the topic of ""${topic}"". For each article, provide a structured JSON response with the following fields:
+
+""id"": a unique string identifier (lowercase with hyphens),
+""title"": the full article title,
+""author"": the author's name (if available, otherwise ""Unknown""),
+""publication"": name of the publication or website,
+""summary"": a detailed 2-3 paragraph summary of the article's key points (at least 300 words),
+""sourceUrl"": the direct URL to the article,
+""imageUrl"": a placeholder image URL (use ""https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=500&auto=format&fit=crop"" if none available)
+
+Return a JSON array of these objects. Format the response EXACTLY as: [{""id"":""..."",""title"":""..."",""author"":""..."",""publication"":""..."",""summary"":""..."",""sourceUrl"":""..."",""imageUrl"":""...""},...]","topic"
+"Post Generator","Post Generation","You are Claude 3.7 Sonnet. Write an engaging LinkedIn post as if I am an industry leader in the ${industry} industry, specifically on the topic of ${topic}.
+
+The post should provide my professional insight on this article:
+Title: ""${article.title}""
+Author: ""${article.author}""
+Publication: ""${article.publication}""
+Summary: ""${article.summary}""
+Article Link: ${article.sourceUrl}
+
+The LinkedIn post should:
+1. Be conversational, authentic, and written in first person
+2. Demonstrate thought leadership and industry expertise
+3. Include 2-3 paragraphs (150-250 words total)
+4. Incorporate a personal perspective or experience related to the article topic
+5. Ask an engaging question to encourage comments
+6. Include 3-4 relevant hashtags at the end
+7. Include the article link somewhere in the post
+
+IMPORTANT: Return the response as a JSON object with exactly 4 posts formatted like this:
+{
+  ""post1"": ""First post content..."",
+  ""post2"": ""Second post content..."",
+  ""post3"": ""Third post content..."",
+  ""post4"": ""Fourth post content...""
+}
+
+Each post should have a different angle or perspective. Do not include any text outside of this JSON structure.","industry, topic, article.title, article.author, article.publication, article.summary, article.sourceUrl" 
