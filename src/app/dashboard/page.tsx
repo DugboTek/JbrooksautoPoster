@@ -1,10 +1,10 @@
 "use client";
 
-// ... (keep previous imports and type definitions)
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
-import PostGenerator from '@/components/PostGenerator';
+import SimplePostGenerator from '@/components/SimplePostGenerator';
+import { useSupabase } from '@/components/providers/supabase-provider';
+import { useRouter } from 'next/navigation';
 
 // Define types for our state
 interface PostingStates {
@@ -34,6 +34,34 @@ export default function Dashboard() {
   const [showScheduleButtons, setShowScheduleButtons] = useState(false);
   // Toggle for post generator
   const [showPostGenerator, setShowPostGenerator] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const { user, isLoading: isAuthLoading } = useSupabase();
+  const router = useRouter();
+  
+  useEffect(() => {
+    // Clear any redirect flags
+    localStorage.removeItem('pendingRedirect');
+    
+    // Check if auth is loaded and user is not authenticated
+    if (!isAuthLoading && !user) {
+      router.push('/login');
+      return;
+    }
+    
+    // Auth is loaded and user is authenticated
+    if (!isAuthLoading && user) {
+      setIsLoading(false);
+    }
+  }, [isAuthLoading, user, router]);
+  
+  if (isLoading || isAuthLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F3F2EF]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
   
   // Add dummy functions for post handling
   const handlePost = (postId: string) => {
@@ -183,7 +211,7 @@ export default function Dashboard() {
           {/* Post Generator Section */}
           {showPostGenerator && (
             <section className="mb-6">
-              <PostGenerator onSavePost={handleSaveGeneratedPost} />
+              <SimplePostGenerator onSavePost={handleSaveGeneratedPost} />
             </section>
           )}
 

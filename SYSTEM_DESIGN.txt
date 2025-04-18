@@ -4,6 +4,36 @@
 
 The LinkedIn Post Generator is a feature within the LinkedIn Automation Platform that allows users to generate, edit, and schedule LinkedIn posts based on article links and topics. The system streamlines the content creation process by automatically generating post variations that users can customize.
 
+## Authentication and User Management
+
+The system integrates with Supabase for secure user authentication and data storage:
+
+1. **Authentication Flow**
+   - **Sign Up**: Multi-step form collecting account, company, and goal information
+   - **Sign In**: Email/password authentication with session management
+   - **Password Reset**: Secure password recovery flow
+   - **Session Management**: Middleware protection for authenticated routes
+
+2. **Security Measures**
+   - Server-side session validation via middleware
+   - Password hashing and security managed by Supabase Auth
+   - Protected API routes with RLS (Row Level Security)
+   - CSRF protection built into authentication flow
+
+3. **User Profiles**
+   - Core user data stored in auth.users table
+   - Extended profile information in public.user_profiles table
+   - Goal tracking and preference management
+   - Company and website information storage
+
+4. **Database Schema for Authentication**
+   - **auth.users**: Core authentication information (managed by Supabase)
+   - **public.user_profiles**: Extended user information
+     - full_name: User's full name
+     - company_name: User's company
+     - website: Company website
+     - goals: Array of selected marketing goals
+
 ## Component Architecture
 
 ### Core Components
@@ -20,7 +50,13 @@ The LinkedIn Post Generator is a feature within the LinkedIn Automation Platform
    - Provides navigation and editing capabilities for posts
    - Allows saving posts to the dashboard
 
-3. **UI Components**
+3. **Authentication Components**
+   - **Login (src/app/login/page.tsx)**: User authentication
+   - **Signup (src/app/signup/page.tsx)**: New user registration
+   - **ResetPassword (src/app/reset-password/page.tsx)**: Password recovery
+   - **SupabaseProvider (src/components/providers/supabase-provider.tsx)**: Authentication state management
+
+4. **UI Components**
    - ChevronIcons (src/components/icons/ChevronIcons.tsx): Navigation arrows for post cycling
    - Future components: Modal dialogs, Toast notifications, etc.
 
@@ -40,20 +76,56 @@ The LinkedIn Post Generator is a feature within the LinkedIn Automation Platform
    - id: string
    - label: string
 
+3. **User**
+   - id: uuid (from auth.users)
+   - email: string
+   - full_name: string
+   - company_name: string
+   - website: string
+   - goals: string[]
+   - created_at: timestamp
+   - updated_at: timestamp
+
 ### State Management
 
-1. **Dashboard State**
+1. **Authentication State**
+   - Managed by SupabaseProvider
+   - User session information
+   - Login status tracking
+   - User profile data access
+
+2. **Dashboard State**
    - activeTab: Controls which tab is currently visible
    - postingStates: Tracks the posting status of individual posts
    - showScheduleButtons: Toggles visibility of scheduling features
 
-2. **PostGenerator State**
+3. **PostGenerator State**
    - Form State: articleLink, selectedTopic, customTopic, isCustomTopic, isGenerating
    - Generated Posts State: generatedPosts, currentPostIndex, editedPost, isEditing
    - Version History State: postHistory, currentPostHistory
    - AI Editor State: aiEditText, isAiEditOpen, isAnimatingEdit, animatedText, placeholderIndex
 
 ## Data Flow and Method Interactions
+
+### Authentication Flow
+
+1. **Sign Up Process**
+   - User submits multi-step form with account, company, and goal information
+   - Supabase Auth creates user in auth.users
+   - Database trigger creates entry in public.user_profiles
+   - User receives confirmation email
+   - Upon confirmation, user can log in
+
+2. **Sign In Process**
+   - User submits credentials
+   - Supabase Auth validates and creates session
+   - Middleware checks for valid session on protected routes
+   - SupabaseProvider makes user data available throughout the app
+
+3. **Protected Route Access**
+   - Middleware checks for valid session
+   - Redirects unauthenticated users to login
+   - Redirects authenticated users away from auth pages
 
 ### Post Generation Flow
 
@@ -102,24 +174,49 @@ The LinkedIn Post Generator is a feature within the LinkedIn Automation Platform
 
 ## Future Enhancements
 
-1. **API Integration**
+1. **Authentication Enhancements**
+   - Social login integration (Google, LinkedIn)
+   - Two-factor authentication
+   - Organization/team management
+   - Role-based access control
+
+2. **API Integration**
    - Replace sample data with real API calls
    - Implement authenticated endpoints for post generation and scheduling
 
-2. **User Preferences**
+3. **User Preferences**
    - Store trending topics per user in database
    - Personalize post generation based on user history
 
-3. **Analytics Integration**
+4. **Analytics Integration**
    - Track post performance metrics
    - Provide insights on optimal posting times and topics
 
-4. **Advanced Editing**
+5. **Advanced Editing**
    - AI-powered editing feature for post enhancement (implemented)
    - Hashtag recommendations based on topic and content
    - Image generation for posts
 
 ## Implementation Details
+
+### Authentication Implementation
+
+The authentication system uses Supabase Auth with the following components:
+
+1. **Client-Side Integration**
+   - @supabase/auth-helpers-nextjs for client components
+   - createClientComponentClient for browser-based auth
+   - SupabaseProvider for auth state management
+
+2. **Server-Side Protection**
+   - createMiddlewareClient for route protection
+   - Middleware verification of sessions
+   - Automatic redirects for unauthorized access
+
+3. **Database Security**
+   - Row Level Security (RLS) policies
+   - Secure triggers for user profile creation
+   - Foreign key relationships between auth and public schemas
 
 ### PostGenerator Component
 
@@ -195,6 +292,8 @@ The PostGenerator component is the core feature for generating LinkedIn posts. I
 2. **Security**
    - Validate input URLs to prevent XSS attacks
    - Implement rate limiting for generation requests
+   - Secure authentication with Supabase Auth
+   - Password policies for strong security
 
 3. **Maintainability**
    - Clear component boundaries with props interface
