@@ -1,33 +1,37 @@
 'use client'
 
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createClientComponentClient, SupabaseClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, useMemo } from 'react'
 import { type User, type Session } from '@supabase/supabase-js'
 import { Toaster } from 'react-hot-toast'
 
 // Define the shape of the context
 type SupabaseContextType = {
+  supabase: SupabaseClient
   user: User | null
   session: Session | null
   isLoading: boolean
   signOut: () => Promise<void>
 }
 
-// Create context with default values
-const SupabaseContext = createContext<SupabaseContextType>({
-  user: null,
-  session: null,
-  isLoading: true,
-  signOut: async () => {}
-})
+// Create context with a placeholder/null default for the client initially
+// The actual client will be provided by the provider component
+const SupabaseContext = createContext<SupabaseContextType | undefined>(undefined)
 
 // Hook to use the Supabase context
-export const useSupabase = () => useContext(SupabaseContext)
+export const useSupabase = () => {
+  const context = useContext(SupabaseContext)
+  if (context === undefined) {
+    throw new Error('useSupabase must be used within a SupabaseProvider')
+  }
+  return context
+}
 
 export default function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const supabase = createClientComponentClient()
+  // Create the client instance only once using useMemo
+  const supabase = useMemo(() => createClientComponentClient(), [])
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -35,12 +39,13 @@ export default function SupabaseProvider({ children }: { children: React.ReactNo
   // Function to sign out
   const signOut = async () => {
     // Clear any pending redirect flags
-    localStorage.removeItem('pendingRedirect');
+    localStorage.removeItem('pendingRedirect')
     
     await supabase.auth.signOut()
     setUser(null)
     setSession(null)
-    router.push('/login')
+    // No need to push here, onAuthStateChange handles SIGNED_OUT
+    // router.push('/login') 
   }
 
   useEffect(() => {
@@ -48,14 +53,19 @@ export default function SupabaseProvider({ children }: { children: React.ReactNo
     const getInitialSession = async () => {
       try {
         setIsLoading(true)
-        const { data: { session: initialSession } } = await supabase.auth.getSession()
+        const { data: { session: initialSession }, error } = await supabase.auth.getSession()
+        
+        if (error) {
+           console.error('[SupabaseProvider] Error getting initial session:', error.message)
+        }
         
         if (initialSession) {
           setSession(initialSession)
           setUser(initialSession.user)
         }
       } catch (error) {
-        console.error('Error getting initial session:', error)
+        // Catch any unexpected errors during async operation
+        console.error('[SupabaseProvider] Unexpected error getting initial session:', error)
       } finally {
         setIsLoading(false)
       }
@@ -74,30 +84,42 @@ export default function SupabaseProvider({ children }: { children: React.ReactNo
         
         if (event === 'SIGNED_IN') {
           console.log('[SupabaseProvider] User signed in')
-          // Add a small delay to ensure cookies are set
-          await new Promise(resolve => setTimeout(resolve, 100))
-          router.refresh()
+          // Add a small delay to ensure cookies are set?
+          // await new Promise(resolve => setTimeout(resolve, 100)) 
+          // Refresh might not be needed if redirection happens correctly
+          // router.refresh()
         }
         
         if (event === 'SIGNED_OUT') {
           console.log('[SupabaseProvider] User signed out')
-          router.refresh()
           // Clear any pending redirect flags
           localStorage.removeItem('pendingRedirect')
-          router.push('/login')
+          router.push('/login') // Redirect on sign out
+          router.refresh() // Refresh after redirect
         }
         
-        setIsLoading(false)
+        // Only set loading to false after initial check?
+        // setIsLoading(false) 
       }
     )
 
     return () => {
-      subscription.unsubscribe()
+      subscription?.unsubscribe()
     }
-  }, [router, supabase])
+  // router dependency might cause excessive reruns, supabase is stable
+  }, [supabase, router]) 
+
+  // Memoize the context value to prevent unnecessary re-renders
+  const value = useMemo(() => ({
+    supabase, // Include the client instance
+    user, 
+    session, 
+    isLoading, 
+    signOut
+  }), [supabase, user, session, isLoading, signOut])
 
   return (
-    <SupabaseContext.Provider value={{ user, session, isLoading, signOut }}>
+    <SupabaseContext.Provider value={value}>
       {children}
       <Toaster position="top-center" />
     </SupabaseContext.Provider>

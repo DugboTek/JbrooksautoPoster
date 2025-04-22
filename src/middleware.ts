@@ -13,85 +13,53 @@ export async function middleware(req: NextRequest) {
   console.log('[Middleware] Running for:', req.nextUrl.pathname); // Log entry point
 
   try {
-    // Check if this is a redirect (to prevent loops)
-    const isRedirected = req.headers.get('x-middleware-rewrite') || 
-                        req.headers.get('x-middleware-next') || 
-                        req.nextUrl.searchParams.has('redirectedFrom');
-    
-    // If this is already a redirected request, just proceed
-    if (isRedirected) {
-      console.log('[Middleware] Already redirected, skipping.');
-      return NextResponse.next();
-    }
-    
     const res = NextResponse.next()
-    
-    // Create a Supabase client configured to use cookies
     const supabase = createMiddlewareClient({ req, res })
-    
-    // Check if we have a session
-    const {
-      data: { session },
-      error: sessionError, // Log potential errors during session fetch
-    } = await supabase.auth.getSession()
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession()
 
     if (sessionError) {
       console.error('[Middleware] Error getting session:', sessionError.message);
     }
     console.log('[Middleware] Session:', session ? 'Exists' : 'None');
 
-    // URL being requested - make it safe
     const requestedUrl = req.nextUrl.pathname
-    
-    // Don't redirect if there's an ongoing auth callback or API route
-    if (requestedUrl.includes('/auth/callback') || requestedUrl.includes('/api/')) {
-      console.log('[Middleware] Skipping auth callback or API route:', requestedUrl);
-      return res
+
+    // Allow requests for API, static files, images, auth callback
+    if (requestedUrl.startsWith('/api') || 
+        requestedUrl.startsWith('/_next/static') || 
+        requestedUrl.startsWith('/_next/image') || 
+        requestedUrl.includes('/auth/callback') ||
+        requestedUrl === '/favicon.ico') {
+      console.log('[Middleware] Skipping asset/API/auth route:', requestedUrl);
+      return res;
     }
 
-    // If no session and trying to access a protected route, redirect to login
+    // If no session and trying to access a protected route (e.g., dashboard)
     if (!session && requestedUrl.startsWith('/dashboard')) {
-      console.log('[Middleware] No session, redirecting to login from:', requestedUrl);
-      console.log('[Middleware] Request Origin:', req.nextUrl.origin); // Log the origin
-      const loginUrl = new URL('/login', req.nextUrl.origin) // Construct new URL
-      
-      // *** Log the URL before redirecting ***
-      console.log('[Middleware] Attempting redirect to (Login):', loginUrl.toString());
-
-      const response = NextResponse.redirect(loginUrl.toString()) // Use string representation
-      response.headers.set('x-middleware-rewrite', '1')
-      return response
+      console.log('[Middleware] No session, rewriting to login from:', requestedUrl);
+      const loginUrl = new URL('/login', req.url); // Use req.url as base for rewrite target
+      console.log('[Middleware] Rewriting to:', loginUrl.toString());
+      return NextResponse.rewrite(loginUrl); // Rewrite instead of redirect
     }
 
     // If session exists and user is on login or signup page, redirect to dashboard
-    // But only if not already in a redirect cycle and not handling auth
-    if (session && 
-        (requestedUrl.startsWith('/login') || requestedUrl.startsWith('/signup')) && 
-        !req.nextUrl.search.includes('code=') && 
-        !req.nextUrl.search.includes('error=')) {
-      
+    if (session && (requestedUrl.startsWith('/login') || requestedUrl.startsWith('/signup'))) {
       console.log('[Middleware] Session exists, redirecting to dashboard from:', requestedUrl);
-      console.log('[Middleware] Request Origin:', req.nextUrl.origin); // Log the origin
-      const dashboardUrl = new URL('/dashboard', req.nextUrl.origin) // Construct new URL
-      
-      // *** Log the URL before redirecting ***
+      const dashboardUrl = new URL('/dashboard', req.nextUrl.origin); // Keep redirect for this case for now
       console.log('[Middleware] Attempting redirect to (Dashboard):', dashboardUrl.toString());
-
-      const response = NextResponse.redirect(dashboardUrl.toString()) // Use string representation
-      response.headers.set('x-middleware-rewrite', '1')
+      // Still using manual string construction for redirect as it was the last working attempt for redirects
+      const response = NextResponse.redirect(dashboardUrl.toString()) 
       return response
     }
 
-    console.log('[Middleware] No redirect conditions met, proceeding.');
+    console.log('[Middleware] No redirect/rewrite conditions met, proceeding.');
     return res
   } catch (error) {
-    // Catch any URL or other errors and log them
     console.error('[Middleware] Error:', error instanceof Error ? error.message : error);
-    // Log the problematic URL if possible
     if (error instanceof TypeError && error.message.includes('Invalid URL')) {
-       console.error('[Middleware] Error likely related to URL:', req.nextUrl.toString());
+       console.error('[Middleware] Error likely related to URL handling during redirect/rewrite:', req.nextUrl.toString());
     }
-    // Return next response as fallback
+    // Fallback to allow request processing if middleware errors
     return NextResponse.next()
   }
 }
@@ -99,9 +67,14 @@ export async function middleware(req: NextRequest) {
 // Define which routes this middleware should run on
 export const config = {
   matcher: [
-    '/dashboard/:path*',
-    '/login',
-    '/signup',
-    '/auth/callback'
-  ]
+    /*
+     * Match all request paths except for the ones starting with:
+     * - api (API routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * Matcher adjusted to exclude these explicitly, complementing the logic inside.
+     */
+    '/((?!api|_next/static|_next/image|favicon.ico|auth/callback).*)',
+  ],
 }

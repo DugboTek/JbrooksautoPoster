@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase/client'
+import { useSupabase } from '@/components/providers/supabase-provider'
 import Link from 'next/link'
 import { useForm, SubmitHandler } from 'react-hook-form'
 import { toast } from 'react-hot-toast'
@@ -17,10 +17,13 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const router = useRouter()
+  const { supabase } = useSupabase()
   const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>()
 
   // Effect to handle auth state changes
   useEffect(() => {
+    if (!supabase) return;
+
     console.log('[Login] Setting up onAuthStateChange listener.');
     
     // Remove any stale redirect flags on component mount
@@ -55,9 +58,15 @@ export default function Login() {
       console.log('[Login] Cleaning up onAuthStateChange listener.');
       authListener?.subscription.unsubscribe();
     };
-  }, []); // Remove router from deps to avoid unnecessary re-runs
+  }, [supabase, router]);
 
   const handleLogin: SubmitHandler<LoginFormData> = async (data) => {
+    if (!supabase) {
+      console.error('[Login] Supabase client not available from provider.');
+      toast.error('Authentication service not ready. Please try again.');
+      return;
+    }
+
     setLoading(true)
     console.log('[Login] Form submitted. Data:', data);
 
@@ -95,6 +104,12 @@ export default function Login() {
   }
 
   const handleResetPassword = async () => {
+    if (!supabase) {
+      console.error('[Login] Supabase client not available from provider for password reset.');
+      toast.error('Authentication service not ready. Please try again.');
+      return;
+    }
+
     const email = prompt('Please enter your email address:')
     
     if (!email) return

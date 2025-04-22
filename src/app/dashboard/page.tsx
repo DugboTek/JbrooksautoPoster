@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
-import SimplePostGenerator from '@/components/SimplePostGenerator';
+import PostGenerator from '@/components/PostGenerator';
 import { useSupabase } from '@/components/providers/supabase-provider';
 import { useRouter } from 'next/navigation';
 
@@ -27,6 +27,43 @@ interface Post {
 }
 
 export default function Dashboard() {
+  const [displayPosts, setDisplayPosts] = useState<Post[]>([
+    { 
+      id: '1', 
+      title: 'LinkedIn Growth Strategies for 2023', 
+      content: 'Discover the top 5 strategies to grow your LinkedIn presence in 2023. Engagement is key to building a strong network and establishing yourself as a thought leader.',
+      imageUrl: 'https://images.unsplash.com/photo-1611944212129-29977ae1398c?q=80&w=2574&auto=format&fit=crop',
+      scheduledDate: '2023-03-15',
+      scheduledTime: '09:00 AM',
+      status: 'scheduled',
+    },
+    { 
+      id: '2', 
+      title: 'How to Write Engaging LinkedIn Posts', 
+      content: 'The secret to writing engaging LinkedIn posts is to provide value, be authentic, and encourage conversation. Here are some tips to help you craft the perfect post.',
+      scheduledDate: '2023-03-16',
+      scheduledTime: '10:30 AM',
+      status: 'scheduled',
+    },
+    { 
+      id: '3', 
+      title: 'LinkedIn Algorithm: What You Need to Know', 
+      content: 'Understanding the LinkedIn algorithm is crucial for maximizing your reach. This post explains how the algorithm works and how you can optimize your content.',
+      imageUrl: 'https://images.unsplash.com/photo-1573164713988-8665fc963095?q=80&w=2669&auto=format&fit=crop',
+      scheduledDate: '2023-03-17',
+      scheduledTime: '02:00 PM',
+      status: 'scheduled',
+    },
+    { 
+      id: '4', 
+      title: 'Building Your Personal Brand on LinkedIn', 
+      content: 'Your personal brand is what sets you apart from others in your industry. Learn how to build a strong personal brand on LinkedIn that attracts opportunities.',
+      scheduledDate: '2023-03-18',
+      scheduledTime: '11:15 AM',
+      status: 'scheduled',
+    },
+  ]);
+
   const [activeTab, setActiveTab] = useState('upcoming');
   const [postingAll, setPostingAll] = useState(false);
   const [postingStates, setPostingStates] = useState<PostingStates>({});
@@ -36,7 +73,7 @@ export default function Dashboard() {
   const [showPostGenerator, setShowPostGenerator] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   
-  const { user, isLoading: isAuthLoading } = useSupabase();
+  const { user, isLoading: isAuthLoading, signOut } = useSupabase();
   const router = useRouter();
   
   useEffect(() => {
@@ -120,49 +157,17 @@ export default function Dashboard() {
     alert('Post added to your scheduled posts!');
   };
   
-  // Enhanced dummy data for display
-  const [displayPosts, setDisplayPosts] = useState<Post[]>([
-    { 
-      id: '1', 
-      title: 'LinkedIn Growth Strategies for 2023', 
-      content: 'Discover the top 5 strategies to grow your LinkedIn presence in 2023. Engagement is key to building a strong network and establishing yourself as a thought leader.',
-      imageUrl: 'https://images.unsplash.com/photo-1611944212129-29977ae1398c?q=80&w=2574&auto=format&fit=crop',
-      scheduledDate: '2023-03-15',
-      scheduledTime: '09:00 AM',
-      status: 'scheduled',
-    },
-    { 
-      id: '2', 
-      title: 'How to Write Engaging LinkedIn Posts', 
-      content: 'The secret to writing engaging LinkedIn posts is to provide value, be authentic, and encourage conversation. Here are some tips to help you craft the perfect post.',
-      scheduledDate: '2023-03-16',
-      scheduledTime: '10:30 AM',
-      status: 'scheduled',
-    },
-    { 
-      id: '3', 
-      title: 'LinkedIn Algorithm: What You Need to Know', 
-      content: 'Understanding the LinkedIn algorithm is crucial for maximizing your reach. This post explains how the algorithm works and how you can optimize your content.',
-      imageUrl: 'https://images.unsplash.com/photo-1573164713988-8665fc963095?q=80&w=2669&auto=format&fit=crop',
-      scheduledDate: '2023-03-17',
-      scheduledTime: '02:00 PM',
-      status: 'scheduled',
-    },
-    { 
-      id: '4', 
-      title: 'Building Your Personal Brand on LinkedIn', 
-      content: 'Your personal brand is what sets you apart from others in your industry. Learn how to build a strong personal brand on LinkedIn that attracts opportunities.',
-      scheduledDate: '2023-03-18',
-      scheduledTime: '11:15 AM',
-      status: 'scheduled',
-    },
-  ]);
-  
   return (
     <div className="min-h-screen bg-[#F3F2EF]">
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">LinkedIn Post Manager</h1>
+          <button 
+            onClick={signOut} 
+            className="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+          >
+            Logout
+          </button>
         </div>
       </header>
 
@@ -211,7 +216,7 @@ export default function Dashboard() {
           {/* Post Generator Section */}
           {showPostGenerator && (
             <section className="mb-6">
-              <SimplePostGenerator onSavePost={handleSaveGeneratedPost} />
+              <PostGenerator onSavePost={handleSaveGeneratedPost} />
             </section>
           )}
 
