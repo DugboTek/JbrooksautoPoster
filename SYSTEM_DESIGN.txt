@@ -11,19 +11,22 @@ The system integrates with Supabase for secure user authentication and data stor
 1. **Authentication Flow**
    - **Sign Up**: Multi-step form collecting account, company, and goal information
    - **Sign In**: Email/password authentication with session management
+     - Utilizes `@supabase/auth-helpers-nextjs` client-side for `signInWithPassword`.
+     - Client-side authentication state is managed via `SupabaseProvider` context.
    - **Password Reset**: Secure password recovery flow
-   - **Session Management**: Middleware protection for authenticated routes
+   - **Session Management**: Handled via cookies set by `@supabase/auth-helpers-nextjs`.
+   - **Route Protection**: Middleware checks session cookies and manages access to protected routes.
 
 2. **Security Measures**
-   - Server-side session validation via middleware
+   - Server-side session validation via middleware using `@supabase/auth-helpers-nextjs` (`createMiddlewareClient`).
    - Password hashing and security managed by Supabase Auth
    - Protected API routes with RLS (Row Level Security)
-   - CSRF protection built into authentication flow
+   - CSRF protection handled implicitly by Supabase Auth Helpers cookie mechanism (verify this if critical).
 
 3. **User Profiles**
    - Core user data stored in auth.users table
    - Extended profile information in public.user_profiles table
-   - Goal tracking and preference management
+   - Goal tracking and preference management (as per user profile schema)
    - Company and website information storage
 
 4. **Database Schema for Authentication**
@@ -42,19 +45,25 @@ The system integrates with Supabase for secure user authentication and data stor
    - Main application interface
    - Displays scheduled and posted content
    - Contains developer controls and feature toggles
+   - Uses `useSupabase` hook for auth state and `signOut`.
+   - Includes client-side check to redirect unauthenticated users.
    - Integrates with the PostGenerator component
 
 2. **PostGenerator (src/components/PostGenerator.tsx)**
-   - Form for article link input and topic selection
+   - Form for industry, topic selection, article selection, and post generation triggering.
    - Displays generated post variations
-   - Provides navigation and editing capabilities for posts
-   - Allows saving posts to the dashboard
+   - Provides navigation, editing (manual & AI), and version history for posts.
+   - Allows saving posts to the dashboard via `onSavePost` prop.
 
 3. **Authentication Components**
    - **Login (src/app/login/page.tsx)**: User authentication
+     - Uses `useSupabase` hook to access context-provided client for login actions.
    - **Signup (src/app/signup/page.tsx)**: New user registration
    - **ResetPassword (src/app/reset-password/page.tsx)**: Password recovery
    - **SupabaseProvider (src/components/providers/supabase-provider.tsx)**: Authentication state management
+     - Creates single client instance (`createClientComponentClient`) and provides it via context.
+     - Provides `user`, `session`, `isLoading`, `signOut`, and the `supabase` client instance.
+     - Handles `onAuthStateChange` events.
 
 4. **UI Components**
    - ChevronIcons (src/components/icons/ChevronIcons.tsx): Navigation arrows for post cycling
@@ -76,7 +85,7 @@ The system integrates with Supabase for secure user authentication and data stor
    - id: string
    - label: string
 
-3. **User**
+3. **UserProfile (public.user_profiles)**
    - id: uuid (from auth.users)
    - email: string
    - full_name: string
@@ -89,7 +98,7 @@ The system integrates with Supabase for secure user authentication and data stor
 ### State Management
 
 1. **Authentication State**
-   - Managed by SupabaseProvider
+   - Managed by `SupabaseProvider` using React Context.
    - User session information
    - Login status tracking
    - User profile data access
@@ -99,7 +108,7 @@ The system integrates with Supabase for secure user authentication and data stor
    - postingStates: Tracks the posting status of individual posts
    - showScheduleButtons: Toggles visibility of scheduling features
 
-3. **PostGenerator State**
+3. **PostGenerator State (Managed within the component)**
    - Form State: articleLink, selectedTopic, customTopic, isCustomTopic, isGenerating
    - Generated Posts State: generatedPosts, currentPostIndex, editedPost, isEditing
    - Version History State: postHistory, currentPostHistory
@@ -117,15 +126,20 @@ The system integrates with Supabase for secure user authentication and data stor
    - Upon confirmation, user can log in
 
 2. **Sign In Process**
-   - User submits credentials
-   - Supabase Auth validates and creates session
-   - Middleware checks for valid session on protected routes
-   - SupabaseProvider makes user data available throughout the app
+   - User submits credentials on Login page.
+   - `handleLogin` uses `supabase.auth.signInWithPassword` from `useSupabase` hook.
+   - `@supabase/auth-helpers-nextjs` handles setting session cookies upon successful login.
+   - `SupabaseProvider` detects `SIGNED_IN` event via `onAuthStateChange` and updates context.
+   - Client-side navigation (e.g., `router.push('/home')`) occurs.
 
 3. **Protected Route Access**
-   - Middleware checks for valid session
-   - Redirects unauthenticated users to login
-   - Redirects authenticated users away from auth pages
+   - User navigates to `/dashboard`.
+   - `middleware.ts` intercepts the request.
+   - Middleware uses `createMiddlewareClient` to check for session cookies.
+   - If no session cookie, middleware **rewrites** the response to serve the `/login` page content (URL remains `/dashboard`).
+   - If session cookie exists, middleware allows the request to proceed.
+   - `Dashboard` component renders, uses `useSupabase` hook to get auth state.
+   - If `user` is null after loading, it performs a client-side redirect to `/login` (redundant safety check).
 
 ### Post Generation Flow
 
@@ -204,14 +218,16 @@ The system integrates with Supabase for secure user authentication and data stor
 The authentication system uses Supabase Auth with the following components:
 
 1. **Client-Side Integration**
-   - @supabase/auth-helpers-nextjs for client components
-   - createClientComponentClient for browser-based auth
-   - SupabaseProvider for auth state management
+   - `@supabase/auth-helpers-nextjs` library.
+   - `createClientComponentClient` used within `SupabaseProvider` to create a shared client instance.
+   - SupabaseProvider for auth state management via React Context (`useSupabase` hook provides context value).
+   - Login/Signup/Dashboard pages use the `useSupabase` hook to access the shared client and auth state.
 
-2. **Server-Side Protection**
-   - createMiddlewareClient for route protection
-   - Middleware verification of sessions
-   - Automatic redirects for unauthorized access
+2. **Server-Side Protection (Middleware)**
+   - `middleware.ts` uses `createMiddlewareClient` from `@supabase/auth-helpers-nextjs`.
+   - Middleware verification of sessions via cookies.
+   - Automatic **rewrite** to `/login` for unauthorized access to `/dashboard`.
+   - Automatic **redirect** from `/login`/`/signup` to `/dashboard` if user is already authenticated.
 
 3. **Database Security**
    - Row Level Security (RLS) policies
@@ -298,4 +314,5 @@ The PostGenerator component is the core feature for generating LinkedIn posts. I
 3. **Maintainability**
    - Clear component boundaries with props interface
    - Comprehensive documentation
+   - Centralized state management for authentication via `SupabaseProvider`.
    - Centralized state management for complex state 
