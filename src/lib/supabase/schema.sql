@@ -21,7 +21,9 @@ create table public.user_profiles (
   company_name text,
   website text,
   goals text[], -- Note: actual column name is 'goals'
-  industry text, -- Added industry column
+  industry text, -- Industry column
+  job_title text, -- Added job_title column
+  avatar_url text, -- Added avatar_url column
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
@@ -56,6 +58,40 @@ create policy "Users can update own profile"
   for update
   using (auth.uid() = id)
   with check (auth.uid() = id);
+
+-- Create avatars storage bucket
+create policy "Avatar images are publicly accessible"
+  on storage.objects
+  for select
+  using (bucket_id = 'avatars');
+
+create policy "Users can upload their own avatar"
+  on storage.objects
+  for insert
+  with check (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can update their own avatar"
+  on storage.objects
+  for update
+  using (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  )
+  with check (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can delete their own avatar"
+  on storage.objects
+  for delete
+  using (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
 
 -- Note: The following tables also exist in the project but might belong to a different app context
 -- Consider moving them to a separate schema file if they are unrelated to JbrooksautoPoster

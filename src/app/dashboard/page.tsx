@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import PostGenerator from '@/components/PostGenerator';
+import ProfileButton from '@/components/ProfileButton';
+import ProfileModal from '@/components/ProfileModal';
 import { useSupabase } from '@/components/providers/supabase-provider';
 import { useRouter } from 'next/navigation';
 
@@ -72,9 +74,16 @@ export default function Dashboard() {
   // Toggle for post generator
   const [showPostGenerator, setShowPostGenerator] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   
-  const { user, isLoading: isAuthLoading, signOut } = useSupabase();
+  const { user, isLoading: isAuthLoading, signOut, supabase } = useSupabase();
   const router = useRouter();
+  
+  const [profileData, setProfileData] = useState({ 
+    full_name: '', 
+    avatar_url: null as string | null,
+    job_title: ''
+  });
   
   useEffect(() => {
     // Clear any redirect flags
@@ -92,6 +101,64 @@ export default function Dashboard() {
     }
   }, [isAuthLoading, user, router]);
   
+  // Fetch user profile when component mounts
+  useEffect(() => {
+    async function fetchProfile() {
+      if (!user) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('user_profiles')
+          .select('full_name, job_title, avatar_url')
+          .eq('id', user.id)
+          .single();
+          
+        if (error) {
+          console.error('Error fetching profile:', error);
+          return;
+        }
+        
+        if (data) {
+          // Add cache-busting parameter to avatar URL
+          let avatarUrl = data.avatar_url;
+          if (avatarUrl && !avatarUrl.includes('?t=')) {
+            avatarUrl = `${avatarUrl}?t=${Date.now()}`;
+          }
+          
+          setProfileData({
+            full_name: data.full_name || '',
+            avatar_url: avatarUrl,
+            job_title: data.job_title || ''
+          });
+        }
+      } catch (err) {
+        console.error('Error in profile fetch:', err);
+      }
+    }
+    
+    fetchProfile();
+    
+    // Add listener for avatar updates
+    const handleAvatarUpdate = () => {
+      fetchProfile();
+    };
+    
+    window.addEventListener('avatar-updated', handleAvatarUpdate);
+    return () => {
+      window.removeEventListener('avatar-updated', handleAvatarUpdate);
+    };
+  }, [user, supabase]);
+  
+  // Open profile modal handler
+  const handleOpenProfileModal = () => {
+    setIsProfileModalOpen(true);
+  };
+
+  // Close profile modal handler
+  const handleCloseProfileModal = () => {
+    setIsProfileModalOpen(false);
+  };
+
   if (isLoading || isAuthLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F3F2EF]">
@@ -160,14 +227,17 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#F3F2EF]">
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">LinkedIn Post Manager</h1>
-          <button 
-            onClick={signOut} 
-            className="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-          >
-            Logout
-          </button>
+          <div className="flex items-center space-x-4">
+            <ProfileButton onClick={handleOpenProfileModal} />
+            <button 
+              onClick={signOut} 
+              className="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+            >
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
@@ -396,64 +466,80 @@ export default function Dashboard() {
                           </div>
                         )}
 
-                        {/* Post Card */}
-                        <div className="bg-white rounded-lg shadow p-4 flex-1 relative">
-                          {/* Post Header */}
-                          <div className="flex justify-between items-start mb-3">
-                            <h3 className="text-lg font-semibold text-gray-900">{post.title}</h3>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-sm text-gray-500">
-                                {post.scheduledDate} • {post.scheduledTime}
-                              </span>
-                              <div className="relative group">
-                                <button className="p-1 rounded-full hover:bg-gray-100">
-                                  <svg className="w-5 h-5 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                        {/* Post Card - Right side */}
+                        <div className="flex-1 bg-white rounded-lg shadow overflow-hidden">
+                          {/* Post header with profile */}
+                          <div className="flex items-center p-4 border-b border-gray-100">
+                            <div className="flex-shrink-0 mr-3">
+                              {profileData.avatar_url ? (
+                                <Image 
+                                  src={profileData.avatar_url} 
+                                  alt={profileData.full_name} 
+                                  width={36} 
+                                  height={36} 
+                                  className="rounded-full border border-gray-200"
+                                  unoptimized={true}
+                                />
+                              ) : (
+                                <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                  <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                   </svg>
-                                </button>
-                                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-10 hidden group-hover:block">
-                                  <button className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Edit Post</button>
-                                  <button className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Duplicate Post</button>
-                                  <button className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">Delete Post</button>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <h4 className="font-medium text-gray-900">{profileData.full_name || 'Your Name'}</h4>
+                                  <p className="text-xs text-gray-500">{profileData.job_title || 'Your Title'}</p>
+                                </div>
+                                
+                                {/* Schedule info */}
+                                <div className="text-sm text-gray-500">
+                                  {post.scheduledDate} • {post.scheduledTime}
                                 </div>
                               </div>
                             </div>
                           </div>
                           
-                          {/* Post Content */}
-                          <p className="text-gray-700 mb-4">{post.content}</p>
-                          
-                          {/* Post Image (if available) */}
-                          {post.imageUrl && (
-                            <div className="relative h-48 mb-4 rounded-lg overflow-hidden">
-                              <Image 
-                                src={post.imageUrl} 
-                                alt={post.title}
-                                fill
-                                sizes="(max-width: 768px) 100vw, 500px"
-                                className="object-cover"
-                                unoptimized={true}
-                              />
-                            </div>
-                          )}
-                          
-                          {/* Post Status */}
-                          <div className="flex justify-between items-center">
-                            <div className="flex items-center">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                post.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
-                                post.status === 'posted' ? 'bg-green-100 text-green-800' :
-                                'bg-red-100 text-red-800'
-                              }`}>
-                                {post.status === 'scheduled' ? 'Scheduled' :
-                                post.status === 'posted' ? 'Posted' : 'Failed'}
-                              </span>
-                            </div>
+                          {/* Post content */}
+                          <div className="p-4">
+                            <h3 className="text-lg font-semibold mb-2">{post.title}</h3>
+                            <p className="text-gray-700 mb-4">{post.content}</p>
                             
-                            {/* Edit and Delete buttons */}
-                            <div className="flex space-x-2">
-                              <button className="text-sm text-gray-500 hover:text-gray-700">Edit</button>
-                              <button className="text-sm text-red-500 hover:text-red-700">Delete</button>
+                            {/* Post Image (if available) */}
+                            {post.imageUrl && (
+                              <div className="relative h-48 mb-4 rounded-lg overflow-hidden">
+                                <Image 
+                                  src={post.imageUrl} 
+                                  alt={post.title}
+                                  fill
+                                  sizes="(max-width: 768px) 100vw, 500px"
+                                  className="object-cover"
+                                  unoptimized={true}
+                                />
+                              </div>
+                            )}
+                            
+                            {/* Post Status */}
+                            <div className="flex justify-between items-center">
+                              <div className="flex items-center">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                  post.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
+                                  post.status === 'posted' ? 'bg-green-100 text-green-800' :
+                                  'bg-red-100 text-red-800'
+                                }`}>
+                                  {post.status === 'scheduled' ? 'Scheduled' :
+                                  post.status === 'posted' ? 'Posted' : 'Failed'}
+                                </span>
+                              </div>
+                              
+                              {/* Edit and Delete buttons */}
+                              <div className="flex space-x-2">
+                                <button className="text-sm text-gray-500 hover:text-gray-700">Edit</button>
+                                <button className="text-sm text-red-500 hover:text-red-700">Delete</button>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -485,6 +571,11 @@ export default function Dashboard() {
           </section>
         </div>
       </main>
+
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={handleCloseProfileModal}
+      />
     </div>
   )
 }

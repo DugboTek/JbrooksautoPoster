@@ -48,6 +48,7 @@ The system integrates with Supabase for secure user authentication and data stor
    - Uses `useSupabase` hook for auth state and `signOut`.
    - Includes client-side check to redirect unauthenticated users.
    - Integrates with the PostGenerator component
+   - Includes the `ProfileButton` component in its header/navigation area.
 
 2. **PostGenerator (src/components/PostGenerator.tsx)**
    - Form for industry, topic selection, article selection, and post generation triggering.
@@ -65,7 +66,17 @@ The system integrates with Supabase for secure user authentication and data stor
      - Provides `user`, `session`, `isLoading`, `signOut`, and the `supabase` client instance.
      - Handles `onAuthStateChange` events.
 
-4. **UI Components**
+4. **ProfileButton (src/components/ProfileButton.tsx)**
+   - Displays user avatar or default icon in the dashboard header.
+   - Fetches the user's `avatar_url`.
+   - On click, opens the `ProfileModal`.
+
+5. **ProfileModal (src/components/ProfileModal.tsx)**
+   - A modal dialog containing a form for users to view and edit their profile information (Full Name, Industry, Job Title).
+   - Allows users to upload/update their profile photo.
+   - Interacts with Supabase `user_profiles` table to fetch/save data and Supabase Storage for avatars.
+
+6. **UI Components**
    - ChevronIcons (src/components/icons/ChevronIcons.tsx): Navigation arrows for post cycling
    - Future components: Modal dialogs, Toast notifications, etc.
 
@@ -92,6 +103,9 @@ The system integrates with Supabase for secure user authentication and data stor
    - company_name: string
    - website: string
    - goals: string[]
+   - industry: string (nullable)
+   - job_title: string (nullable)
+   - avatar_url: string (nullable) - Public URL of the profile photo in Supabase Storage.
    - created_at: timestamp
    - updated_at: timestamp
 
@@ -109,12 +123,7 @@ The system integrates with Supabase for secure user authentication and data stor
    - showScheduleButtons: Toggles visibility of scheduling features
 
 3. **PostGenerator State (Managed within the component)**
-   - Form State: articleLink, selectedTopic, customTopic, isCustomTopic, isGenerating
-   - Generated Posts State: generatedPosts, currentPostIndex, editedPost, isEditing
-   - Version History State: postHistory, currentPostHistory
-   - AI Editor State: aiEditText, isAiEditOpen, isAnimatingEdit, animatedText, placeholderIndex
-
-## Data Flow and Method Interactions
+   - Form State: articleLink, selectedTopic, customTopic, isCustomTopic, isGenerating11
 
 ### Authentication Flow
 
@@ -140,6 +149,22 @@ The system integrates with Supabase for secure user authentication and data stor
    - If session cookie exists, middleware allows the request to proceed.
    - `Dashboard` component renders, uses `useSupabase` hook to get auth state.
    - If `user` is null after loading, it performs a client-side redirect to `/login` (redundant safety check).
+
+### Profile Management Flow
+
+1. User clicks the `ProfileButton` in the dashboard header.
+2. The `ProfileModal` opens (state managed by the `Dashboard` component).
+3. `ProfileModal` fetches the current user's data from the `public.user_profiles` table using the user ID obtained from the `useSupabase` hook.
+4. Form fields (`full_name`, `industry`, `job_title`) are populated. The current avatar is displayed using `avatar_url`.
+5. User edits text fields.
+6. User clicks "Upload Photo":
+   * A file input (`<input type="file" accept="image/*">`) is triggered.
+   * User selects an image. Client-side validation checks file type/size.
+   * The file is uploaded to the `avatars` bucket in Supabase Storage using the path `public/{user_id}.{ext}`. The `upload` function should use the `upsert: true` option to replace existing files.
+   * Supabase Storage returns the public URL for the uploaded file.
+7. User clicks "Save".
+8. The `ProfileModal` performs a Supabase `update` on the `public.user_profiles` table for the current `user.id`, setting the new `full_name`, `industry`, `job_title`, and the `avatar_url` obtained from the upload (if a new photo was uploaded).
+9. On success, the modal closes, feedback is potentially shown (e.g., toast notification), and the `ProfileButton` (and potentially other UI elements) might refresh to show the new data/avatar.
 
 ### Post Generation Flow
 
@@ -233,6 +258,115 @@ The authentication system uses Supabase Auth with the following components:
    - Row Level Security (RLS) policies
    - Secure triggers for user profile creation
    - Foreign key relationships between auth and public schemas
+
+### PostGenerator Component
+
+The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
+
+1. **Input Form**
+   - Article link input field
+   - Topic selection dropdown with trending topics
+   - Option to enter a custom topic
+
+2. **Post Generation**
+   - Sends article link and topic to backend
+   - Displays loading state during generation
+   - Shows generated posts once available
+
+3. **Post Navigation**
+   - Left/right arrows to cycle through post variations
+   - Current post counter (e.g., "1/4")
+
+4. **Post Editing**
+   - In-place editing of generated posts
+   - Save/cancel options for edits
+   - Version history tracking for each post
+   - Undo/redo buttons to navigate through edit history with animated transitions
+   - AI Edit feature integrated within the post container with animated reveal
+   - Toggle button in post header to show/hide the AI edit interface
+   - Live text editing animation showing the transition between original and edited content
+   - Blinking cursor effect to enhance the typing animation experience
+   - Rotating placeholder suggestions in the AI Edit input field
+   - Quick edit functionality with auto-processing based on common edit instructions
+
+5. **Post Saving**
+   - Option to save the current post to the dashboard
+   - Integration with parent component via onSavePost callback
+
+## Integration Points
+
+1. **Dashboard Integration**
+   - PostGenerator will be integrated into the Dashboard as a new panel
+   - When a post is saved, it will appear in the posts list on the Dashboard
+   - Scheduled status and timing will be applied to saved posts
+
+2. **API Services (Current & Future)**
+   - Authentication service for user validation
+   - Post generation service for creating post variations
+   - OpenAI API integration for intelligent post editing
+   - Scheduling service for scheduling posts
+   - Analytics service for tracking post performance
+
+## UI/UX Considerations
+
+1. **Responsive Design**
+   - Form and post display adapt to different screen sizes
+   - Mobile-friendly controls and editing interface
+
+2. **User Feedback**
+   - Loading indicators during post generation
+   - Success/error messages for actions
+   - Smooth transitions between posts
+   - Animated text transitions for AI edits to provide visual feedback
+
+3. **Accessibility**
+   - Proper ARIA labels for navigation
+   - Keyboard navigation support
+   - Focus management for editing
+
+## Technical Constraints
+
+1. **Performance**
+   - Limit number of generated posts to prevent overwhelming users
+   - Optimize API calls to reduce generation time
+
+2. **Security**
+   - Validate input URLs to prevent XSS attacks
+   - Implement rate limiting for generation requests
+   - Secure authentication with Supabase Auth
+   - Password policies for strong security
+
+3. **Maintainability**
+   - Clear component boundaries with props interface
+   - Comprehensive documentation
+   - Centralized state management for authentication via `SupabaseProvider`.
+   - Centralized state management for complex state 
+
+### Supabase Storage Integration
+
+1. **Bucket:** `avatars`
+   - Public Bucket: Configured to allow public reads so avatars can be displayed easily via URL.
+   - Used for storing user profile photos throughout the application.
+   - Path structure: `{user_id}/avatar.{extension}` - This follows best practices for Row Level Security.
+
+2. **Policies for `avatars` Bucket:**
+   - **SELECT:** Allow public/anonymous read access for objects (e.g., `(bucket_id = 'avatars')`).
+   - **INSERT:** Allow authenticated users to insert into paths matching their user ID following the pattern `(bucket_id = 'avatars') AND (auth.uid()::text = (storage.foldername(name))[1])` for paths like `user_id/avatar.png`.
+   - **UPDATE:** Allow authenticated users to update objects matching their user ID using the same pattern.
+   - **DELETE:** Allow authenticated users to delete objects matching their user ID using the same pattern.
+
+3. **Avatar Usage Throughout Application:**
+   - **Profile Modal:** Users can upload and preview their profile photo in the edit profile section.
+   - **Dashboard Header:** Avatar is displayed in the profile button in the top navigation.
+   - **Post Generation:** User's avatar is displayed in the LinkedIn-style post preview to simulate actual LinkedIn post appearance.
+   - **Post Cards:** Each post card displays the author's avatar in a LinkedIn-style header to maintain visual consistency.
+
+4. **Avatar Upload Process:**
+   - User selects an image file through the profile edit interface
+   - Client validates the file size and type
+   - File is uploaded directly to Supabase Storage using the pattern `{user_id}/avatar.{extension}`
+   - URL is stored in the `avatar_url` field of the `user_profiles` table
+   - Profile component updates to display the new avatar image
 
 ### PostGenerator Component
 

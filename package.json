@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@notionhq/client": "^2.3.0",
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@types/node": "20.8.4",
