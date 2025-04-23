@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GeistSans } from 'geist/font/sans'
 import "./globals.css";
+import SupabaseProvider from '@/components/providers/supabase-provider'
 
 export const metadata: Metadata = {
   title: "LinkedIn Automation Platform",
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={GeistSans.className}>
       <body>
-        {children}
+        <SupabaseProvider>
+          {children}
+        </SupabaseProvider>
       </body>
     </html>
   )

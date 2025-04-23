@@ -1,21 +1,104 @@
 -- Enable Row Level Security
-alter table auth.users enable row level security;
+-- alter table auth.users enable row level security; -- Likely already enabled
 
--- Create tables
-create table public.users (
+-- -- Create tables (Old/Incorrect definition - commenting out)
+-- create table public.users (
+--   id uuid references auth.users on delete cascade not null primary key,
+--   email text not null unique,
+--   full_name text,
+--   company_name text,
+--   website text,
+--   linkedin_goals text[],
+--   industry text,
+--   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+--   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+-- );
+
+-- Corrected table definition based on project vjxuxqdpuraewcwtalyz
+create table public.user_profiles (
   id uuid references auth.users on delete cascade not null primary key,
-  email text not null unique,
   full_name text,
   company_name text,
   website text,
-  linkedin_goals text[],
+  goals text[], -- Note: actual column name is 'goals'
+  industry text, -- Industry column
+  job_title text, -- Added job_title column
+  avatar_url text, -- Added avatar_url column
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- Enable Row Level Security for user_profiles
+alter table public.user_profiles enable row level security;
+
+-- -- RLS policies for public.users (commenting out)
+-- create policy "Users can view own data"
+--   on public.users
+--   for select
+--   using (auth.uid() = id);
+-- 
+-- create policy "Users can update own data"
+--   on public.users
+--   for update
+--   using (auth.uid() = id);
+
+-- RLS policies for user_profiles
+create policy "Users can view own profile"
+  on public.user_profiles
+  for select
+  using (auth.uid() = id);
+
+create policy "Users can insert own profile"
+  on public.user_profiles
+  for insert
+  with check (auth.uid() = id);
+
+create policy "Users can update own profile"
+  on public.user_profiles
+  for update
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
+
+-- Create avatars storage bucket
+create policy "Avatar images are publicly accessible"
+  on storage.objects
+  for select
+  using (bucket_id = 'avatars');
+
+create policy "Users can upload their own avatar"
+  on storage.objects
+  for insert
+  with check (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can update their own avatar"
+  on storage.objects
+  for update
+  using (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  )
+  with check (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can delete their own avatar"
+  on storage.objects
+  for delete
+  using (
+    bucket_id = 'avatars' AND 
+    auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+-- Note: The following tables also exist in the project but might belong to a different app context
+-- Consider moving them to a separate schema file if they are unrelated to JbrooksautoPoster
+/*
 create table public.automation_settings (
   id uuid default uuid_generate_v4() primary key,
-  user_id uuid references public.users on delete cascade not null,
+  user_id uuid references public.users on delete cascade not null, -- This references the old public.users table
   posting_frequency text not null,
   preferred_times time[] not null,
   topics text[],
@@ -25,7 +108,7 @@ create table public.automation_settings (
 
 create table public.posts (
   id uuid default uuid_generate_v4() primary key,
-  user_id uuid references public.users on delete cascade not null,
+  user_id uuid references public.users on delete cascade not null, -- This references the old public.users table
   content text not null,
   status text not null,
   scheduled_for timestamp with time zone,
@@ -47,7 +130,7 @@ create table public.engagement_metrics (
 
 create table public.linkedin_connections (
   id uuid default uuid_generate_v4() primary key,
-  user_id uuid references public.users on delete cascade not null,
+  user_id uuid references public.users on delete cascade not null, -- This references the old public.users table
   linkedin_user_id text not null,
   access_token text not null,
   refresh_token text not null,
@@ -56,15 +139,5 @@ create table public.linkedin_connections (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Enable RLS policies
-create policy "Users can view own data"
-  on public.users
-  for select
-  using (auth.uid() = id);
-
-create policy "Users can update own data"
-  on public.users
-  for update
-  using (auth.uid() = id);
-
 -- Repeat similar policies for other tables
+*/

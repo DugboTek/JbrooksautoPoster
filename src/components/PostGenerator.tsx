@@ -7,6 +7,8 @@ import profilePic from '../soladugbo.jpg';
 import { Topic } from '@/types/topics';
 import { Article } from '@/types/articles';
 import { fetchIndustryTopics, fetchArticlesByTopic, generatePostsWithClaude } from '@/services/perplexityApi';
+import { useSupabase } from '@/components/providers/supabase-provider';
+import { UserCircleIcon } from '@heroicons/react/24/outline';
 
 // Import Swiper and required modules
 import { Swiper, SwiperSlide } from 'swiper/react';
@@ -275,6 +277,62 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   // Refs
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const swiperRef = useRef<any>(null);
+  
+  // Supabase
+  const { supabase, user } = useSupabase();
+  const [profileData, setProfileData] = useState<{ full_name: string | null; job_title: string | null; avatar_url: string | null }>({
+    full_name: null,
+    job_title: null,
+    avatar_url: null
+  });
+  
+  // Fetch profile data when component mounts
+  useEffect(() => {
+    async function fetchProfile() {
+      if (!user) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('user_profiles')
+          .select('full_name, job_title, avatar_url')
+          .eq('id', user.id)
+          .single();
+          
+        if (error) {
+          console.error('Error fetching profile:', error);
+          return;
+        }
+        
+        if (data) {
+          // Add a cache-busting timestamp to avatar URL
+          let avatarUrl = data.avatar_url;
+          if (avatarUrl && !avatarUrl.includes('?t=')) {
+            avatarUrl = `${avatarUrl}?t=${Date.now()}`;
+          }
+          
+          setProfileData({
+            full_name: data.full_name || 'Your Name',
+            job_title: data.job_title || 'Your Title',
+            avatar_url: avatarUrl
+          });
+        }
+      } catch (err) {
+        console.error('Error in profile fetch:', err);
+      }
+    }
+    
+    fetchProfile();
+    
+    // Add listener for avatar updates
+    const handleAvatarUpdate = () => {
+      fetchProfile();
+    };
+    
+    window.addEventListener('avatar-updated', handleAvatarUpdate);
+    return () => {
+      window.removeEventListener('avatar-updated', handleAvatarUpdate);
+    };
+  }, [user, supabase]);
   
   // Handle topic selection or custom search
   const handleTopicSearch = async (topic: string, isCustomSearch: boolean = false) => {
@@ -1186,19 +1244,25 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
             {/* Post Header with Profile */}
             <div className="flex items-start p-4 border-b border-gray-100">
               <div className="flex-shrink-0 mr-3">
-                <Image 
-                  src={profilePic} 
-                  alt="Sola Dugbo" 
-                  width={48} 
-                  height={48} 
-                  className="rounded-full border border-gray-200"
-                />
+                {profileData.avatar_url ? (
+                  <Image 
+                    src={profileData.avatar_url} 
+                    alt={profileData.full_name || 'User'} 
+                    width={48} 
+                    height={48} 
+                    className="rounded-full border border-gray-200"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full border border-gray-200 bg-gray-100 flex items-center justify-center">
+                    <UserCircleIcon className="w-10 h-10 text-gray-400" />
+                  </div>
+                )}
               </div>
               <div className="flex-1">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-medium text-gray-900">Sola Dugbo</h4>
-                    <p className="text-gray-500 text-sm">Digital Marketing Specialist</p>
+                    <h4 className="font-medium text-gray-900">{profileData.full_name || 'Your Name'}</h4>
+                    <p className="text-gray-500 text-sm">{profileData.job_title || 'Your Title'}</p>
                     <div className="flex items-center text-xs text-gray-500 mt-1">
                       <span>1d • </span>
                       <svg className="h-3 w-3 ml-1 text-gray-500" fill="currentColor" viewBox="0 0 16 16">
