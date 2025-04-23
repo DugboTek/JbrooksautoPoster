@@ -168,11 +168,13 @@ The system integrates with Supabase for secure user authentication and data stor
 
 ### Post Generation Flow
 
-1. User enters an article link and selects a topic in the PostGenerator component
-2. User clicks "Generate Posts" button, triggering the handleGeneratePosts method
-3. handleGeneratePosts makes an API call (simulated in current implementation)
-4. Generated posts are stored in the generatedPosts state array
-5. First post is automatically selected (currentPostIndex = 0)
+1. User enters either a topic or a direct article URL into the main input field of the PostGenerator component.
+2. User clicks "Generate Posts" button, triggering the handleGeneratePosts method.
+3. handleGeneratePosts determines if the input is a URL or a topic:
+   - **If URL:** Makes an API call directly with the URL to fetch, summarize, and generate posts.
+   - **If Topic:** Makes an API call with the topic to search for articles, potentially allowing selection (if applicable based on final design), then fetch/summarize the chosen article and generate posts. (Current implementation might simulate parts of this).
+4. Generated posts are stored in the generatedPosts state array.
+5. First post is automatically selected (currentPostIndex = 0).
 
 ### Post Navigation Flow
 
@@ -264,12 +266,12 @@ The authentication system uses Supabase Auth with the following components:
 The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
 
 1. **Input Form**
-   - Article link input field
-   - Topic selection dropdown with trending topics
-   - Option to enter a custom topic
+   - Input field for Topic or Article URL: Accepts either a search topic (for article discovery) or a direct article URL.
+   - (Optional) Topic selection mechanism if the input is detected as a topic.
 
 2. **Post Generation**
-   - Sends article link and topic to backend
+   - Validates the input (detects if it's a URL or a topic).
+   - Sends the URL or topic to the backend API service.
    - Displays loading state during generation
    - Shows generated posts once available
 
@@ -373,12 +375,12 @@ The PostGenerator component is the core feature for generating LinkedIn posts. I
 The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
 
 1. **Input Form**
-   - Article link input field
-   - Topic selection dropdown with trending topics
-   - Option to enter a custom topic
+   - Input field for Topic or Article URL: Accepts either a search topic (for article discovery) or a direct article URL.
+   - (Optional) Topic selection mechanism if the input is detected as a topic.
 
 2. **Post Generation**
-   - Sends article link and topic to backend
+   - Validates the input (detects if it's a URL or a topic).
+   - Sends the URL or topic to the backend API service.
    - Displays loading state during generation
    - Shows generated posts once available
 
