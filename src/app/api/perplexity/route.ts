@@ -11,7 +11,30 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body = await request.json();
+    const requestBody = await request.json();
+    let perplexityRequestBody;
+
+    // Check if we got a prompt string or messages array
+    if (requestBody.prompt) {
+      // Simple prompt format
+      perplexityRequestBody = {
+        model: 'sonar-pro',
+        messages: [
+          {
+            role: 'user',
+            content: requestBody.prompt
+          }
+        ]
+      };
+    } else {
+      // Already formatted messages array
+      perplexityRequestBody = {
+        model: requestBody.model || 'sonar-pro',
+        messages: requestBody.messages
+      };
+    }
+
+    console.log('Sending request to Perplexity API:', JSON.stringify(perplexityRequestBody, null, 2));
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -19,12 +42,21 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(perplexityRequestBody)
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return NextResponse.json(error, { status: response.status });
+      const errorText = await response.text();
+      console.error('Error response from Perplexity API:', errorText);
+      try {
+        const error = JSON.parse(errorText);
+        return NextResponse.json(error, { status: response.status });
+      } catch {
+        return NextResponse.json(
+          { error: `Perplexity API error: ${response.status} - ${errorText.substring(0, 500)}` },
+          { status: response.status }
+        );
+      }
     }
 
     const data = await response.json();

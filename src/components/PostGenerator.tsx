@@ -6,7 +6,7 @@ import Image from 'next/image';
 import profilePic from '../soladugbo.jpg';
 import { Topic } from '@/types/topics';
 import { Article } from '@/types/articles';
-import { fetchIndustryTopics, fetchArticlesByTopic, generatePostsWithClaude } from '@/services/perplexityApi';
+import { fetchIndustryTopics, fetchArticlesByTopic } from '@/services/perplexityApi';
 import { useSupabase } from '@/components/providers/supabase-provider';
 import { UserCircleIcon } from '@heroicons/react/24/outline';
 
@@ -132,94 +132,36 @@ const FALLBACK_GENERATED_POSTS = [
 ];
 
 interface PostGeneratorProps {
-  onSavePost?: (post: string) => void;
+  onSavePost?: (post: string, title?: string, imageUrl?: string) => void;
 }
 
-/**
- * Generates LinkedIn posts based on an article using Perplexity API
- */
-async function generatePostsFromArticle(article: Article): Promise<string[]> {
-  console.log('Generating posts for article:', article.title);
-  
-  // Check if API key is available
-  const PERPLEXITY_API_KEY = process.env.NEXT_PUBLIC_PERPLEXITY_API_KEY;
-  if (!PERPLEXITY_API_KEY) {
-    console.error('Perplexity API key is missing');
-    return FALLBACK_GENERATED_POSTS;
-  }
-  
+// Helper function to validate URL
+const isValidUrl = (urlString: string): boolean => {
   try {
-    const query = `Generate 4 unique, engaging LinkedIn posts based on this article:
-      Title: "${article.title}"
-      Author: "${article.author}"
-      Publication: "${article.publication}"
-      Summary: "${article.summary}"
-      
-      Each post should:
-      1. Be 2-3 paragraphs (100-200 words)
-      2. Sound authentic and conversational (like a real person, not AI)
-      3. Include relevant hashtags at the end (2-4 hashtags)
-      4. Ask a thoughtful question to encourage engagement
-      5. Reference the article content without repeating the title verbatim
-      6. Have a unique angle or personal insight
-      
-      Return 4 distinct posts separated by a delimiter, not numbered or with any prefix.`;
-    
-    console.log('Making Perplexity API call for post generation');
-    
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'sonar-pro',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful assistant that generates engaging LinkedIn posts based on articles.'
-          },
-          {
-            role: 'user',
-            content: query
-          }
-        ]
-      })
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Perplexity API error:', errorData);
-      throw new Error(`API request failed: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    console.log('Post generation API response:', data);
-    
-    const content = data.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('No content returned from Perplexity API');
-    }
-    
-    // Split the content into separate posts - assume posts are separated by line breaks
-    const posts = content.split(/\n{2,}/)
-      .filter(post => post.trim().length > 0)
-      .map(post => post.trim())
-      .slice(0, 4); // Take at most 4 posts
-    
-    console.log('Generated posts:', posts);
-    
-    if (posts.length === 0) {
-      throw new Error('No valid posts were generated');
-    }
-    
-    return posts;
-  } catch (error) {
-    console.error('Error generating posts:', error);
-    return FALLBACK_GENERATED_POSTS;
+    new URL(urlString);
+    // Basic check for protocol and domain, might need refinement
+    return urlString.startsWith('http://') || urlString.startsWith('https://');
+  } catch (e) {
+    return false;
   }
-}
+};
+
+// Add a useDebounce custom hook at the beginning of the file, after imports
+const useDebounce = <T,>(value: T, delay: number): T => {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+};
 
 export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   // Industry state
@@ -236,6 +178,7 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [useClaudeStyle, setUseClaudeStyle] = useState(true); // Default to Claude-style generation
+  const [isUrlInput, setIsUrlInput] = useState(false); // State to track input type
   
   // Articles state
   const [articles, setArticles] = useState<Article[]>([]);
@@ -285,6 +228,47 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
     job_title: null,
     avatar_url: null
   });
+  
+  // At the top of the file, add a new state for storing article summaries from URLs
+  const [urlArticleSummary, setUrlArticleSummary] = useState<{
+    title: string;
+    summary: string;
+    url: string;
+  } | null>(null);
+  const [isLoadingUrlSummary, setIsLoadingUrlSummary] = useState(false);
+  const [urlSummaryError, setUrlSummaryError] = useState<string | null>(null);
+  
+  // Update input type state and handle URL debouncing when searchTopic changes
+  const debouncedSearchTopic = useDebounce(searchTopic, 800); // 800ms debounce delay
+
+  // This effect detects when input is a URL and clears article selection if needed
+  useEffect(() => {
+    const isUrlType = isValidUrl(searchTopic);
+    setIsUrlInput(isUrlType);
+    
+    // Reset selected article if input changes and it's not a topic anymore or topic doesn't match
+    if (isUrlType) {
+      setSelectedArticle(null);
+      setArticles([]); // Clear articles if URL is entered
+    } else {
+      // Clear URL summary if input is not a URL
+      setUrlArticleSummary(null);
+      setIsLoadingUrlSummary(false);
+    }
+  }, [searchTopic]);
+  
+  // This effect handles the debounced URL summary fetching
+  useEffect(() => {
+    // Only fetch if the debounced value is a valid URL
+    if (isValidUrl(debouncedSearchTopic) && debouncedSearchTopic.length > 10) {
+      console.log(`Debounced URL fetch triggered for: ${debouncedSearchTopic}`);
+      fetchUrlSummary(debouncedSearchTopic);
+    } else if (debouncedSearchTopic !== searchTopic) {
+      // Clear URL summary if debounced value is not valid 
+      // and is different from current value (prevents clearing on initial render)
+      setUrlArticleSummary(null);
+    }
+  }, [debouncedSearchTopic]);
   
   // Fetch profile data when component mounts
   useEffect(() => {
@@ -400,21 +384,64 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   
   // Handle form submission to generate posts
   const handleGeneratePosts = async () => {
-    if (!selectedArticle) return;
-    
+    if (!searchTopic) return; // Don't generate if input is empty
+
     setIsGenerating(true);
-    
+    setGeneratedPosts([]); // Clear previous posts
+    setCurrentPostIndex(0);
+    setEditedPost('');
+
+    const inputType = isUrlInput ? 'url' : 'topic';
+
     try {
-      // Always use Claude-style post generation with industry and topic context
-      const posts = await generatePostsWithClaude(
-        selectedArticle,
-        industry || 'Professional', // Fallback if industry is empty
-        selectedTopicLabel || 'Business' // Fallback if topic is empty
-      );
-      
-      setGeneratedPosts(posts);
-      setCurrentPostIndex(0);
-      setEditedPost(posts[0]);
+      let requestBody: any;
+
+      if (inputType === 'url') {
+        requestBody = { input: searchTopic, inputType: 'url' };
+      } else {
+        // If it's a topic, ensure an article is selected
+        if (!selectedArticle) {
+          console.error("Topic input detected, but no article selected.");
+          // Maybe show a user message here instead of just logging
+          setIsGenerating(false);
+          return; // Stop generation if no article selected for a topic
+        }
+        requestBody = {
+          input: selectedArticle, // Send the whole article object for context
+          inputType: 'topic',
+          industry: industry || 'Professional',
+          topicLabel: selectedTopicLabel || 'Business'
+        };
+      }
+
+      // --- Backend API Call ---
+      console.log('Calling backend API /api/generate-posts with body:', requestBody);
+      const response = await fetch('/api/generate-posts', { // TODO: Create this API route
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({})); // Catch errors if response is not JSON
+        console.error('API Error:', response.status, errorData);
+        throw new Error(`API request failed: ${response.status}`);
+      }
+
+      const posts = await response.json();
+      // --- End Backend API Call ---
+
+      if (!posts || posts.length === 0) {
+          console.warn("API returned no posts, using fallbacks.");
+          setGeneratedPosts(FALLBACK_GENERATED_POSTS);
+          setCurrentPostIndex(0);
+          setEditedPost(FALLBACK_GENERATED_POSTS[0]);
+      } else {
+          setGeneratedPosts(posts);
+          setCurrentPostIndex(0);
+          setEditedPost(posts[0]);
+      }
+
     } catch (error) {
       console.error('Failed to generate posts:', error);
       // Use fallback posts if generation fails
@@ -598,7 +625,11 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   // Save the current post to the dashboard
   const handleSavePost = () => {
     if (onSavePost && generatedPosts.length > 0) {
-      onSavePost(generatedPosts[currentPostIndex]);
+      // Pass only the post content and title, NOT the image URL
+      const postContent = generatedPosts[currentPostIndex];
+      const postTitle = selectedArticle?.title || '';
+      
+      onSavePost(postContent, postTitle);
     }
   };
   
@@ -756,55 +787,232 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
     };
   }, [isGenerating]);
   
-  // Function to animate the text transition between old and new versions
-  const animateTextChange = (oldText: string, newText: string) => {
+  // Function to animate the text transition between old and new versions with granular diff visualization
+  const animateTextChange = (oldText: string, newText: string, diff?: { 
+    added: {text: string, index: number}[]; 
+    removed: {text: string, index: number}[];
+    changes?: { type: string, text: string }[];
+  }) => {
     setIsAnimatingEdit(true);
     setAnimatedText(oldText);
 
-    // Find the common prefix between the two strings
-    let commonPrefixLength = 0;
-    const minLength = Math.min(oldText.length, newText.length);
-    
-    while (commonPrefixLength < minLength && 
-           oldText[commonPrefixLength] === newText[commonPrefixLength]) {
-      commonPrefixLength++;
-    }
-    
-    // Calculate what needs to be backspaced and what needs to be typed
-    const backspaceLength = oldText.length - commonPrefixLength;
-    const newTextToType = newText.substring(commonPrefixLength);
-    
-    // Current text state
-    let currentText = oldText;
-    let backspaceStep = 0;
-    let typeStep = 0;
-    
-    // Backspace animation
-    const backspaceInterval = setInterval(() => {
-      if (backspaceStep < backspaceLength) {
-        currentText = currentText.slice(0, -1);
+    // If we have detailed changes, use them for word-level animation
+    if (diff?.changes && diff.changes.length > 0) {
+      // Start with original text
+      let finalText = '';
+      let currentText = '';
+      let animationSteps: { action: 'add' | 'remove' | 'keep', text: string }[] = [];
+      
+      // Process changes to build animation steps
+      diff.changes.forEach(change => {
+        if (change.type === 'keep') {
+          finalText += change.text;
+          currentText += change.text;
+          animationSteps.push({ action: 'keep', text: change.text });
+        } else if (change.type === 'remove') {
+          // For removals, we'll animate the text being deleted
+          currentText += change.text;
+          animationSteps.push({ action: 'remove', text: change.text });
+        } else if (change.type === 'add') {
+          // For additions, we'll animate the text being added
+          finalText += change.text;
+          animationSteps.push({ action: 'add', text: change.text });
+        }
+      });
+      
+      // Create a sequence of operations
+      const performAnimation = async () => {
+        // First set the starting text (with all text that will be removed)
         setAnimatedText(currentText);
-        backspaceStep++;
-      } else {
-        clearInterval(backspaceInterval);
         
-        // Start typing animation after backspacing is complete
-        const typeInterval = setInterval(() => {
-          if (typeStep < newTextToType.length) {
-            currentText += newTextToType[typeStep];
+        // Wait a moment before starting animation
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Process each animation step
+        for (let i = 0; i < animationSteps.length; i++) {
+          const step = animationSteps[i];
+          
+          if (step.action === 'remove') {
+            // Animate removal word by word
+            const textToRemove = step.text;
+            let currentAnimText = currentText;
+            
+            // Find position of text to remove
+            const removeIndex = currentAnimText.indexOf(textToRemove);
+            if (removeIndex >= 0) {
+              // Remove the text
+              currentText = currentAnimText.substring(0, removeIndex) + 
+                           currentAnimText.substring(removeIndex + textToRemove.length);
+              
+              // Update animation
+              setAnimatedText(currentText);
+              
+              // Pause briefly after removal
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } else if (step.action === 'add') {
+            // Animate addition word by word
+            const textToAdd = step.text;
+            
+            // Find where to add the text (after the previous content)
+            const addIndex = currentText.length;
+            
+            // Add the text
+            currentText = currentText.substring(0, addIndex) + textToAdd;
+            
+            // Update animation
             setAnimatedText(currentText);
-            typeStep++;
-          } else {
-            clearInterval(typeInterval);
-            setIsAnimatingEdit(false);
-            // Update the actual post after animation completes
-            const newPosts = [...generatedPosts];
-            newPosts[currentPostIndex] = newText;
-            setGeneratedPosts(newPosts);
+            
+            // Pause briefly after addition
+            await new Promise(resolve => setTimeout(resolve, 150));
           }
-        }, 25); // Typing speed
+        }
+        
+        // Complete animation
+        setAnimatedText(newText);
+        setIsAnimatingEdit(false);
+        
+        // Update the actual post
+        const newPosts = [...generatedPosts];
+        newPosts[currentPostIndex] = newText;
+        setGeneratedPosts(newPosts);
+      };
+      
+      // Start the animation
+      performAnimation();
+    }
+    // If we have diff information (but not detailed changes), use it for character-level animation
+    else if (diff && diff.added.length > 0 && diff.removed.length > 0) {
+      // Start with original text
+      let currentText = oldText;
+      let currentPosition = 0;
+      
+      // Create array of animation steps
+      const animationSteps: {type: 'remove' | 'add', text: string, index: number}[] = [];
+      
+      // Add removal steps first
+      diff.removed.forEach(removal => {
+        animationSteps.push({
+          type: 'remove',
+          text: removal.text,
+          index: removal.index
+        });
+      });
+      
+      // Then add addition steps
+      diff.added.forEach(addition => {
+        animationSteps.push({
+          type: 'add',
+          text: addition.text,
+          index: addition.index
+        });
+      });
+      
+      // Sort steps by index for proper sequence
+      animationSteps.sort((a, b) => a.index - b.index);
+      
+      // Execute each animation step with delay
+      let stepIndex = 0;
+      
+      const executeAnimationStep = () => {
+        if (stepIndex >= animationSteps.length) {
+          // Animation complete
+          setIsAnimatingEdit(false);
+          // Update the actual post after animation completes
+          const newPosts = [...generatedPosts];
+          newPosts[currentPostIndex] = newText;
+          setGeneratedPosts(newPosts);
+          return;
+        }
+        
+        const step = animationSteps[stepIndex];
+        
+        if (step.type === 'remove') {
+          // Animate removal character by character
+          let charIndex = 0;
+          const removeInterval = setInterval(() => {
+            if (charIndex >= step.text.length) {
+              clearInterval(removeInterval);
+              stepIndex++;
+              setTimeout(executeAnimationStep, 100); // Short pause between steps
+              return;
+            }
+            
+            // Remove one character at a time
+            const removeIndex = step.index + charIndex;
+            currentText = currentText.substring(0, removeIndex) + currentText.substring(removeIndex + 1);
+            setAnimatedText(currentText);
+            charIndex++;
+          }, 15); // Fast removal
+        } else {
+          // Animate addition character by character
+          let charIndex = 0;
+          const addInterval = setInterval(() => {
+            if (charIndex >= step.text.length) {
+              clearInterval(addInterval);
+              stepIndex++;
+              setTimeout(executeAnimationStep, 100); // Short pause between steps
+              return;
+            }
+            
+            // Add one character at a time
+            const addIndex = step.index + charIndex;
+            currentText = currentText.substring(0, addIndex) + step.text[charIndex] + currentText.substring(addIndex);
+            setAnimatedText(currentText);
+            charIndex++;
+          }, 25); // Slightly slower addition for readability
+        }
+      };
+      
+      // Start the animation sequence
+      executeAnimationStep();
+    } else {
+      // Fallback to simple animation if no diff is provided
+      // Find the common prefix between the two strings
+      let commonPrefixLength = 0;
+      const minLength = Math.min(oldText.length, newText.length);
+      
+      while (commonPrefixLength < minLength && 
+             oldText[commonPrefixLength] === newText[commonPrefixLength]) {
+        commonPrefixLength++;
       }
-    }, 15); // Backspacing speed
+      
+      // Calculate what needs to be backspaced and what needs to be typed
+      const backspaceLength = oldText.length - commonPrefixLength;
+      const newTextToType = newText.substring(commonPrefixLength);
+      
+      // Current text state
+      let currentText = oldText;
+      let backspaceStep = 0;
+      let typeStep = 0;
+      
+      // Backspace animation
+      const backspaceInterval = setInterval(() => {
+        if (backspaceStep < backspaceLength) {
+          currentText = currentText.slice(0, -1);
+          setAnimatedText(currentText);
+          backspaceStep++;
+        } else {
+          clearInterval(backspaceInterval);
+          
+          // Start typing animation after backspacing is complete
+          const typeInterval = setInterval(() => {
+            if (typeStep < newTextToType.length) {
+              currentText += newTextToType[typeStep];
+              setAnimatedText(currentText);
+              typeStep++;
+            } else {
+              clearInterval(typeInterval);
+              setIsAnimatingEdit(false);
+              // Update the actual post after animation completes
+              const newPosts = [...generatedPosts];
+              newPosts[currentPostIndex] = newText;
+              setGeneratedPosts(newPosts);
+            }
+          }, 25); // Typing speed
+        }
+      }, 15); // Backspacing speed
+    }
   };
   
   // Handle AI edit submission
@@ -822,7 +1030,8 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
         },
         body: JSON.stringify({
           postContent: generatedPosts[currentPostIndex],
-          editInstruction: aiEditText
+          editInstruction: aiEditText,
+          modelPreference: modelPreference
         })
       });
 
@@ -838,14 +1047,17 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
         throw new Error('No edited content returned from API');
       }
 
-      // Start animation between old text and new text
-      animateTextChange(generatedPosts[currentPostIndex], data.editedPost);
+      // Start animation between old text and new text, passing diff if available
+      animateTextChange(generatedPosts[currentPostIndex], data.editedPost, data.diff);
       
       // Add this edit to history after animation
       addToHistory(data.editedPost);
       
       // Reset the input
       setAiEditText('');
+      
+      // Close AI edit panel to make animation more visible
+      setIsAiEditOpen(false);
     } catch (error) {
       console.error('Error editing post:', error);
       // Fallback to basic editing if API fails
@@ -858,77 +1070,128 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
     }
   };
   
+  // Determine if Generate button should be enabled
+  const canGenerate = !isGenerating && searchTopic.trim().length > 0 && (isUrlInput || !!selectedArticle);
+  
+  // Fetch article summary for a URL
+  const fetchUrlSummary = async (url: string) => {
+    if (!isValidUrl(url)) return;
+    
+    setIsLoadingUrlSummary(true);
+    setUrlSummaryError(null);
+    setUrlArticleSummary(null);
+
+    try {
+      console.log(`Fetching summary for URL: ${url}`);
+      // Here we use the backend summarizeUrlContent functionality
+      const response = await fetch('/api/summarize-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('URL Summary API Error:', response.status, errorData);
+        throw new Error(`URL summary failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('URL summary:', data);
+      
+      setUrlArticleSummary({
+        title: data.title,
+        summary: data.summary,
+        url: url
+      });
+    } catch (error: any) {
+      console.error('Error fetching URL summary:', error);
+      setUrlSummaryError('Failed to load article summary. Please check the URL and try again.');
+    } finally {
+      setIsLoadingUrlSummary(false);
+    }
+  };
+  
+  // Add a new state for model preference
+  const [modelPreference, setModelPreference] = useState<'fastest' | 'balanced' | 'quality'>('fastest');
+  
   return (
-    <div className="bg-white rounded-lg shadow-md">
-      {/* Post Generator Form */}
-      <div className="p-6 border-b border-gray-200">
-        <h2 className="text-xl font-semibold text-gray-800 mb-4">Generate LinkedIn Posts</h2>
-        
-        {/* Industry Input */}
-        <div className="mb-6">
-          <label htmlFor="industry-input" className="block text-lg font-medium text-gray-700 mb-2">
-            What's your industry?
-          </label>
-          <div className="flex items-center gap-2">
-            <input
-              id="industry-input"
-              type="text"
-              value={industry}
-              onChange={(e) => setIndustry(e.target.value)}
-              placeholder="e.g., Healthcare, Technology, Finance"
-              className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && industry.trim()) {
-                  handleGenerateTopics();
-                }
-              }}
-            />
+    <div className="p-6 bg-white rounded-lg shadow-lg space-y-6 max-w-4xl mx-auto">
+      {/* Step 1: Industry & Topic/URL Input */}
+      <div className="flex flex-col space-y-2">
+        <label htmlFor="industry-input" className="text-lg font-semibold text-gray-800">
+          What's your industry?
+        </label>
+        <div className="flex items-center gap-2">
+           <input
+            id="industry-input"
+            type="text"
+            value={industry}
+            onChange={(e) => setIndustry(e.target.value)}
+            placeholder="e.g., Healthcare, Technology, Finance"
+            className="flex-1 border p-3 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && industry.trim()) {
+                handleGenerateTopics();
+              }
+            }}
+          />
+          <button
+             onClick={handleGenerateTopics}
+             disabled={!industry.trim() || isLoadingTopics}
+             className="whitespace-nowrap px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+           >
+             {isLoadingTopics ? (
+               <>
+                 <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                 </svg>
+                 {topicLoadingStage}
+               </>
+             ) : (
+               'Generate Topics'
+             )}
+           </button>
+         </div>
+           {/* Error message for topics */}
+           {error && (
+             <div className="mt-2 text-red-500 text-sm">
+               {error}
+             </div>
+           )}
+      </div>
+
+      <div className="flex flex-col space-y-2">
+        <label htmlFor="topicOrUrl" className="text-lg font-semibold text-gray-800">
+          Enter Topic or Article URL
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="topicOrUrl"
+            type="text"
+            value={searchTopic}
+            onChange={(e) => setSearchTopic(e.target.value)}
+            placeholder="e.g., 'Future of AI' or 'https://example.com/article'"
+            className="flex-1 border p-3 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+            onKeyPress={(e) => {
+                 // Trigger search on Enter only if it's a topic
+                 if (e.key === 'Enter' && searchTopic.trim() && !isUrlInput) {
+                   handleTopicSearch(searchTopic.trim(), true);
+                 }
+                 // Trigger generation on Enter if it's a URL and valid
+                 if (e.key === 'Enter' && isUrlInput && canGenerate) {
+                    handleGeneratePosts();
+                 }
+            }}
+          />
+          {/* Show search button only if input is not a URL */}
+          { !isUrlInput && (
             <button
-              onClick={handleGenerateTopics}
-              disabled={!industry.trim() || isLoadingTopics}
-              className="whitespace-nowrap px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
-            >
-              {isLoadingTopics ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Generating...
-                </>
-              ) : (
-                'Generate Topics'
-              )}
-            </button>
-          </div>
-          
-          {/* Error message */}
-          {error && (
-            <div className="mt-2 text-red-500 text-sm">
-              {error}
-            </div>
-          )}
-        </div>
-        
-        {/* Topic Selection */}
-        <div className="mb-6">
-          <label htmlFor="topic-search" className="block text-lg font-medium text-gray-700 mb-2">
-            Find Articles by Topic
-          </label>
-          <div className="relative">
-            <div className="flex gap-2">
-              <input
-                id="topic-search"
-                type="text"
-                value={searchTopic}
-                onChange={(e) => setSearchTopic(e.target.value)}
-                placeholder="Type a topic (e.g., AI, Leadership) or select from below"
-                className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg"
-              />
-              <button
                 onClick={() => handleTopicSearch(searchTopic.trim(), true)}
                 disabled={!searchTopic.trim() || isLoadingArticles}
-                className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center whitespace-nowrap"
+                className="px-4 py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center whitespace-nowrap"
+                aria-label="Search Topic"
               >
                 {isLoadingArticles ? (
                   <>
@@ -939,528 +1202,651 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
                     Searching...
                   </>
                 ) : (
-                  <>
-                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                    Search
-                  </>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                   </svg>
                 )}
               </button>
-            </div>
-            {searchTopic && !isLoadingArticles && (
-              <div className="absolute z-10 w-full mt-1 bg-white rounded-md shadow-lg border border-gray-200">
-                <div className="max-h-60 overflow-y-auto">
-                  {topics
-                    .filter(topic => topic.label.toLowerCase().includes(searchTopic.toLowerCase()))
-                    .map(topic => (
-                      <button
-                        key={topic.id}
-                        onClick={() => handleTopicSearch(topic.id)}
-                        className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                      >
-                        {topic.label}
-                      </button>
-                    ))
-                  }
-                </div>
-              </div>
-            )}
-          </div>
-          
-          {/* Topic Pills - with Loading State */}
-          <div className="mt-4 flex flex-wrap gap-2">
-            {isLoadingTopics ? (
-              // Skeleton loading for topics
-              Array(10).fill(0).map((_, index) => (
-                <div 
-                  key={index} 
-                  className="px-3 py-1 rounded-full bg-gray-200 animate-pulse w-32 h-8"
-                ></div>
-              ))
-            ) : topics.length > 0 ? (
-              // Rendered topics
-              topics.map(topic => (
-                <button
-                  key={topic.id}
-                  onClick={() => handleTopicSearch(topic.id)}
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors
-                    ${selectedTopic === topic.id 
-                      ? 'bg-blue-100 text-blue-800 border-2 border-blue-500' 
-                      : 'bg-gray-100 text-gray-800 hover:bg-gray-200 border-2 border-transparent'
-                    }`}
-                >
-                  {topic.label}
-                </button>
-              ))
-            ) : (
-              // No topics state
-              <p className="text-gray-500 italic">Enter your industry and click "Generate Topics" to see relevant trending topics</p>
-            )}
-          </div>
+           )}
         </div>
-        
-        {/* Article Selection - Shown only when a topic is selected or searching */}
-        {(selectedTopic || searchTopic.trim()) && (
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="text-lg font-medium text-gray-800">Select an Article</h3>
-              <div className="flex items-center space-x-3">
-                <span className="text-sm text-gray-500 hidden sm:inline-block">
-                  <svg className="w-4 h-4 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
-                  </svg>
-                  Swipe to browse
-                </span>
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => scrollArticles('left')}
-                    className="p-1 rounded-full hover:bg-gray-100"
-                    aria-label="Scroll left"
-                  >
-                    <ChevronLeftIcon className="h-6 w-6 text-gray-600" />
-                  </button>
-                  <button
-                    onClick={() => scrollArticles('right')}
-                    className="p-1 rounded-full hover:bg-gray-100"
-                    aria-label="Scroll right"
-                  >
-                    <ChevronRightIcon className="h-6 w-6 text-gray-600" />
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            {/* Error message for articles */}
-            {articleError && !isLoadingArticles && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-                <p className="text-yellow-700">{articleError}</p>
-              </div>
-            )}
-            
-            {/* Article Display Area */}
-            <div className="relative">
-              {/* Loading state for articles */}
-              {isLoadingArticles && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex items-center justify-center">
-                  <div className="text-center">
-                    <svg className="animate-spin mx-auto h-12 w-12 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <p className="mt-2 text-gray-600">{loadingStage}</p>
-                  </div>
-                </div>
-              )}
-              
-              {/* Article Grid or Swiper */}
-              <div className="relative overflow-hidden rounded-lg">
-                {isLoadingArticles ? (
-                  // Loading skeleton grid
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {Array(3).fill(0).map((_, index) => (
-                      <div key={index} className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                        <div className="h-44 bg-gray-200 animate-pulse"></div>
-                        <div className="p-4">
-                          <div className="h-6 bg-gray-200 animate-pulse mb-2 w-3/4"></div>
-                          <div className="h-4 bg-gray-200 animate-pulse mb-2 w-1/2"></div>
-                          <div className="h-4 bg-gray-200 animate-pulse mb-2 w-full"></div>
-                          <div className="h-4 bg-gray-200 animate-pulse mb-2 w-full"></div>
-                          <div className="h-4 bg-gray-200 animate-pulse w-2/3"></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : articles.length > 0 ? (
-                  // Swiper with articles
-                  <Swiper
-                    onSwiper={(swiper) => {
-                      swiperRef.current = swiper;
-                    }}
-                    slidesPerView="auto"
-                    spaceBetween={16}
-                    freeMode={{
-                      enabled: true,
-                      momentum: true,
-                      momentumRatio: 0.8,
-                      momentumVelocityRatio: 0.8,
-                    }}
-                    modules={[FreeMode, Navigation]}
-                    wrapperClass="px-2 py-2"
-                  >
-                    {articles.map((article) => (
-                      <SwiperSlide key={article.id} className="!w-80 max-w-[80vw]">
-                        <div 
-                          className={`h-full rounded-lg overflow-hidden transition-all transform hover:scale-[1.02] cursor-pointer ${
-                            selectedArticle?.id === article.id ? 'ring-4 ring-blue-500' : 'border border-gray-200'
-                          }`}
-                          onClick={() => handleSelectArticle(article)}
-                        >
-                          <div className="relative h-44 w-full">
-                            <Image
-                              src={article.imageUrl}
-                              alt={article.title}
-                              fill
-                              sizes="320px"
-                              className="object-cover"
-                              unoptimized={true}
-                              draggable="false"
-                            />
-                          </div>
-                          <div className="p-4 flex flex-col h-[calc(100%-11rem)]">
-                            <div className="min-h-[3.5rem]">
-                              <h4 className={`font-medium text-gray-900 mb-1 ${
-                                article.title.length > 60 
-                                  ? 'text-sm leading-tight' 
-                                  : article.title.length > 40 
-                                    ? 'text-base leading-tight' 
-                                    : 'text-lg'
-                              }`}>
-                                {article.title}
-                              </h4>
-                            </div>
-                            <div className="flex items-center mb-2">
-                              <span className="text-sm text-gray-600">
-                                {article.author} • {article.publication}
-                              </span>
-                            </div>
-                            <p className="text-gray-600 text-sm flex-grow overflow-hidden line-clamp-3">{article.summary}</p>
-                            <button 
-                              className="mt-3 text-blue-600 hover:text-blue-800 text-sm flex items-center"
-                              onClick={(e) => {
-                                e.stopPropagation(); // Prevent article selection
-                                handleOpenArticle(article.sourceUrl);
-                              }}
-                            >
-                              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                              Read Original
-                            </button>
-                          </div>
-                        </div>
-                      </SwiperSlide>
-                    ))}
-                  </Swiper>
-                ) : (
-                  // No articles found
-                  <div className="bg-gray-50 rounded-lg p-8 text-center">
-                    <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
-                    </svg>
-                    <h3 className="mt-2 text-lg font-medium text-gray-900">No articles found</h3>
-                    <p className="mt-1 text-gray-500">Try selecting a different topic or checking back later.</p>
-                  </div>
-                )}
-                
-                {/* Add shadow indicators for overflow content */}
-                <div className="absolute top-0 bottom-0 left-0 w-8 bg-gradient-to-r from-white to-transparent pointer-events-none z-10"></div>
-                <div className="absolute top-0 bottom-0 right-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10"></div>
-              </div>
-            </div>
-          </div>
-        )}
-        
-        {/* Generate Button - Only visible when an article is selected */}
-        {selectedArticle && (
-          <div className="mt-6">
-            <div className="bg-blue-50 p-4 rounded-lg mb-4">
-              <h4 className={`font-medium text-blue-900 mb-2 ${
-                selectedArticle.title.length > 80 
-                  ? 'text-base leading-tight' 
-                  : selectedArticle.title.length > 50 
-                    ? 'text-lg leading-tight' 
-                    : 'text-xl'
-              }`}>
-                {selectedArticle.title}
-              </h4>
-              <div className="flex items-center mb-2">
-                <span className="text-sm text-blue-800">
-                  By {selectedArticle.author} • {selectedArticle.publication}
-                </span>
-              </div>
-              <p className="text-blue-800 text-sm mb-3">{selectedArticle.summary}</p>
-              <button 
-                className="text-blue-700 hover:text-blue-900 text-sm flex items-center"
-                onClick={() => handleOpenArticle(selectedArticle.sourceUrl)}
-              >
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                Read Full Article
-              </button>
-            </div>
-            
-            <button
-              onClick={handleGeneratePosts}
-              disabled={isGenerating}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-            >
-              {isGenerating ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Generating...
-                </>
-              ) : (
-                'Generate Industry-Expert Posts'
-              )}
-            </button>
-          </div>
-        )}
       </div>
-      
-      {/* Generated Posts */}
-      {generatedPosts.length > 0 && (
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium text-gray-800">
-              Generated Posts ({currentPostIndex + 1}/{generatedPosts.length})
-            </h3>
-            <div className="flex space-x-2">
-              <button
-                onClick={handlePreviousPost}
-                disabled={currentPostIndex === 0}
-                className="p-1 rounded-full hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Previous post"
-              >
-                <ChevronLeftIcon className="h-6 w-6 text-gray-600" />
-              </button>
-              <button
-                onClick={handleNextPost}
-                disabled={currentPostIndex === generatedPosts.length - 1}
-                className="p-1 rounded-full hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Next post"
-              >
-                <ChevronRightIcon className="h-6 w-6 text-gray-600" />
-              </button>
-            </div>
-          </div>
-          
-          {/* LinkedIn-style Post Container */}
-          <div className="bg-white border border-gray-300 rounded-lg shadow-sm mb-4">
-            {/* Post Header with Profile */}
-            <div className="flex items-start p-4 border-b border-gray-100">
-              <div className="flex-shrink-0 mr-3">
-                {profileData.avatar_url ? (
-                  <Image 
-                    src={profileData.avatar_url} 
-                    alt={profileData.full_name || 'User'} 
-                    width={48} 
-                    height={48} 
-                    className="rounded-full border border-gray-200"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-full border border-gray-200 bg-gray-100 flex items-center justify-center">
-                    <UserCircleIcon className="w-10 h-10 text-gray-400" />
-                  </div>
-                )}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-gray-900">{profileData.full_name || 'Your Name'}</h4>
-                    <p className="text-gray-500 text-sm">{profileData.job_title || 'Your Title'}</p>
-                    <div className="flex items-center text-xs text-gray-500 mt-1">
-                      <span>1d • </span>
-                      <svg className="h-3 w-3 ml-1 text-gray-500" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5z"/>
-                      </svg>
-                    </div>
-                  </div>
-                  {!isEditing && (
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={handleUndo}
-                        disabled={!currentPostHistory || currentPostHistory.length <= 1}
-                        className="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-100 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-indigo-500"
-                        aria-label="Undo changes"
-                        title="Undo to previous version"
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={toggleAiEdit}
-                        className="p-1.5 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded"
-                        aria-label="AI Edit post"
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={handleStartEditing}
-                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
-                        aria-label="Edit post"
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-            
-            {/* AI Edit Bar - Inside post container with animation */}
-            <div 
-              className={`overflow-hidden transition-all duration-300 ease-in-out ${
-                isAiEditOpen ? 'max-h-24 opacity-100 border-b border-gray-100' : 'max-h-0 opacity-0'
-              }`}
-            >
-              <div className="p-3 bg-blue-50">
-                <div className="flex">
-                  <input
-                    id="ai-edit"
-                    type="text"
-                    value={aiEditText}
-                    onChange={(e) => setAiEditText(e.target.value)}
-                    placeholder={aiEditPlaceholders[placeholderIndex]}
-                    className="flex-1 px-3 py-2 border border-blue-300 rounded-l-md text-gray-700 placeholder-gray-400/70 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                  />
-                  <button
-                    onClick={handleAiEdit}
-                    disabled={isGenerating || !aiEditText.trim()}
-                    className="px-3 py-2 bg-blue-600 text-white rounded-r-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center text-sm"
-                  >
-                    {isGenerating ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4 text-white mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        {aiEditingStage}
-                      </>
-                    ) : (
-                      <span className="flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M8.48 4.415c.293-.293.77-.293 1.061 0l4.95 4.95a.75.75 0 010 1.06l-4.95 4.95a.75.75 0 01-1.06-1.06L12.44 10 8.48 6.04a.75.75 0 010-1.06z" clipRule="evenodd" />
-                        </svg>
-                        ✨
-                      </span>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            {/* Post Content */}
-            <div className="p-4">
-              {isEditing ? (
-                <div className="flex flex-col">
-                  <textarea
-                    ref={textareaRef}
-                    value={editedPost}
-                    onChange={(e) => setEditedPost(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 min-h-[150px] resize-y mb-3"
-                  />
-                  <div className="flex justify-end space-x-2">
-                    <button
-                      onClick={handleCancelEdit}
-                      className="px-3 py-1.5 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSaveEdit}
-                      className="px-3 py-1.5 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-gray-800 whitespace-pre-wrap text-base leading-relaxed">
-                  {isAnimatingEdit ? animatedText : generatedPosts[currentPostIndex]}
-                  {isAnimatingEdit && (
-                    <span className="inline-block w-1 h-4 bg-blue-500 ml-[1px] animate-pulse"></span>
-                  )}
-                </p>
-              )}
-            </div>
-            
-            {/* Post Footer with Engagement Metrics */}
-            {!isEditing && (
-              <div className="border-t border-gray-100 px-4 py-2">
-                <div className="flex justify-between text-gray-500 text-sm">
-                  <div className="flex items-center">
-                    <span className="flex items-center mr-4">
-                      <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M8.864.046C7.908-.193 7.02.53 6.956 1.466c-.072 1.051-.23 2.016-.428 2.59-.125.36-.479 1.013-1.04 1.639-.557.623-1.282 1.178-2.131 1.41C2.685 7.288 2 7.87 2 8.72v4.001c0 .845.682 1.464 1.448 1.545 1.07.114 1.564.415 2.068.723l.048.03c.272.165.578.348.97.484.397.136.861.217 1.466.217h3.5c.937 0 1.599-.477 1.934-1.064a1.86 1.86 0 0 0 .254-.912c0-.152-.023-.312-.077-.464.201-.263.38-.578.488-.901.11-.33.172-.762.004-1.149.069-.13.12-.269.159-.403.077-.27.113-.568.113-.857 0-.288-.036-.585-.113-.856a2.144 2.144 0 0 0-.138-.362 1.9 1.9 0 0 0 .234-1.734c-.206-.592-.682-1.1-1.2-1.272-.847-.282-1.803-.276-2.516-.211a9.84 9.84 0 0 0-.443.05 9.365 9.365 0 0 0-.062-4.509A1.38 1.38 0 0 0 9.125.111L8.864.046zM11.5 14.721H8c-.51 0-.863-.069-1.14-.164-.281-.097-.506-.228-.776-.393l-.04-.024c-.555-.339-1.198-.731-2.49-.868-.333-.036-.554-.29-.554-.55V8.72c0-.254.226-.543.62-.65 1.095-.3 1.977-.996 2.614-1.708.635-.71 1.064-1.475 1.238-1.978.243-.7.407-1.768.482-2.85.025-.362.36-.594.667-.518l.262.066c.16.04.258.143.288.255a8.34 8.34 0 0 1-.145 4.725.5.5 0 0 0 .595.644l.003-.001.014-.003.058-.014a8.908 8.908 0 0 1 1.036-.157c.663-.06 1.457-.054 2.11.164.175.058.45.3.57.65.107.308.087.67-.266 1.022l-.353.353.353.354c.043.043.105.141.154.315.048.167.075.37.075.581 0 .212-.027.414-.075.582-.05.174-.111.272-.154.315l-.353.353.353.354c.047.047.109.177.005.488a2.224 2.224 0 0 1-.505.805l-.353.353.353.354c.006.005.041.05.041.17a.866.866 0 0 1-.121.416c-.165.288-.503.56-1.066.56z"/>
-                      </svg>
-                      Like
-                    </span>
-                    <span className="flex items-center mr-4">
-                      <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12.793a.5.5 0 0 0 .854.353l2.853-2.853A1 1 0 0 1 4.414 12H14a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
-                        <path d="M3 3.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zM3 6a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9A.5.5 0 0 1 3 6zm0 2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z"/>
-                      </svg>
-                      Comment
-                    </span>
-                    <span className="flex items-center">
-                      <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 16 16">
-                        <path d="M13.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM11 2.5a2.5 2.5 0 1 1 .603 1.628l-6.718 3.12a2.499 2.499 0 0 1 0 1.504l6.718 3.12a2.5 2.5 0 1 1-.488.876l-6.718-3.12a2.5 2.5 0 1 1 0-3.256l6.718-3.12A2.5 2.5 0 0 1 11 2.5zm-8.5 4a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm11 5.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/>
-                      </svg>
-                      Share
-                    </span>
-                  </div>
-                  <div className="flex items-center">
-                    <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 16 16">
-                      <path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10zm0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/>
-                    </svg>
-                    <span>You</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          
-          {/* Post Source Info */}
-          {selectedArticle && (
-            <div className="bg-blue-50 p-3 rounded-lg mb-4 text-sm text-blue-800">
-              <p>Generated based on: <strong>{selectedArticle.title}</strong></p>
-            </div>
+
+       {/* URL Article Preview (Only show if input is a URL) */}
+       {isUrlInput && (
+         <div className="mt-6">
+           {isLoadingUrlSummary ? (
+             // Loading skeleton for URL summary
+             <div className="bg-white rounded-lg border border-gray-200 p-4 animate-pulse">
+               <div className="h-6 bg-gray-200 rounded w-3/4 mb-4"></div>
+               <div className="space-y-2">
+                 <div className="h-4 bg-gray-200 rounded w-full"></div>
+                 <div className="h-4 bg-gray-200 rounded w-full"></div>
+                 <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+                 <div className="h-4 bg-gray-200 rounded w-full"></div>
+               </div>
+             </div>
+           ) : urlArticleSummary ? (
+             // URL summary display
+             <div className="bg-white rounded-lg border border-gray-200 p-4">
+               <h3 className="text-xl font-semibold text-gray-800 mb-2">{urlArticleSummary.title}</h3>
+               <div className="text-gray-600 mb-3">{urlArticleSummary.summary}</div>
+               <div className="text-sm text-gray-500 flex items-center">
+                 <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                 </svg>
+                 <a href={urlArticleSummary.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                   {urlArticleSummary.url.length > 50 ? urlArticleSummary.url.substring(0, 50) + '...' : urlArticleSummary.url}
+                 </a>
+               </div>
+             </div>
+           ) : urlSummaryError ? (
+             // Error message
+             <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg p-4">
+               <div className="flex items-center">
+                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                 </svg>
+                 <span>{urlSummaryError}</span>
+               </div>
+             </div>
+           ) : searchTopic.length > 0 ? (
+             // Prompt to enter a valid URL
+             <div className="bg-gray-50 border border-gray-200 text-gray-600 rounded-lg p-4 text-center">
+               <p>Enter a complete URL to see article summary</p>
+             </div>
+           ) : null}
+         </div>
+       )}
+
+       {/* Topic Pills Section (Show if not URL input) */}
+      { !isUrlInput && (
+          <div className="mt-4 flex flex-wrap gap-2">
+             {isLoadingTopics ? (
+               // Skeleton loading for topics
+               Array(10).fill(0).map((_, index) => (
+                 <div
+                   key={index}
+                   className="px-3 py-1 rounded-full bg-gray-200 animate-pulse w-32 h-8"
+                 ></div>
+               ))
+             ) : topics.length > 0 ? (
+               // Rendered topics
+               topics.map(topic => (
+                 <button
+                   key={topic.id}
+                   // Pass label to search function to match existing behavior
+                   onClick={() => handleTopicSearch(topic.label, false)}
+                   className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                     selectedTopicLabel === topic.label
+                       ? 'bg-indigo-100 text-indigo-800 ring-2 ring-indigo-500'
+                       : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                     }`}
+                 >
+                   {topic.label}
+                 </button>
+               ))
+             ) : (
+               // No topics state (e.g., after initial load or if API failed without fallback)
+                !industry && <p className="text-gray-500 italic text-sm">Enter your industry and click "Generate Topics" to see relevant trending topics.</p>
+             )}
+           </div>
+       )}
+
+      {/* Step 2: Article Selection (Only show if input is a topic and articles are loaded/loading) */}
+       { !isUrlInput && (articles.length > 0 || isLoadingArticles || articleError) && ( // Show this section if we have articles, are loading, or have an error (for topics only)
+         <div className="space-y-4 mt-6">
+           <h3 className="text-xl font-semibold text-gray-800 mb-2">Select an Article</h3>
+           <div className="flex justify-between items-center mb-3">
+             <span className="text-sm text-gray-500 hidden sm:inline-block">
+               <svg className="w-4 h-4 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+               </svg>
+               Swipe to browse
+             </span>
+             <div className="flex space-x-2">
+               <button
+                 onClick={() => scrollArticles('left')}
+                 className="p-1 rounded-full hover:bg-gray-100"
+                 aria-label="Scroll left"
+               >
+                 <ChevronLeftIcon className="h-6 w-6 text-gray-600" />
+               </button>
+               <button
+                 onClick={() => scrollArticles('right')}
+                 className="p-1 rounded-full hover:bg-gray-100"
+                 aria-label="Scroll right"
+               >
+                 <ChevronRightIcon className="h-6 w-6 text-gray-600" />
+               </button>
+             </div>
+           </div>
+           
+           {/* Article Display Area */}
+           <div className="relative">
+             {/* Loading state for articles */}
+             {isLoadingArticles && (
+               <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex items-center justify-center">
+                 <div className="text-center">
+                   <svg className="animate-spin mx-auto h-12 w-12 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                   </svg>
+                   <p className="mt-2 text-gray-600">{loadingStage}</p>
+                 </div>
+               </div>
+             )}
+             
+             {/* Article Grid or Swiper */}
+             <div className="relative overflow-hidden rounded-lg">
+               {isLoadingArticles ? (
+                 // Loading skeleton grid
+                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                   {Array(3).fill(0).map((_, index) => (
+                     <div key={index} className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                       <div className="h-44 bg-gray-200 animate-pulse"></div>
+                       <div className="p-4">
+                         <div className="h-6 bg-gray-200 animate-pulse mb-2 w-3/4"></div>
+                         <div className="h-4 bg-gray-200 animate-pulse mb-2 w-1/2"></div>
+                         <div className="h-4 bg-gray-200 animate-pulse mb-2 w-full"></div>
+                         <div className="h-4 bg-gray-200 animate-pulse mb-2 w-full"></div>
+                         <div className="h-4 bg-gray-200 animate-pulse w-2/3"></div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               ) : articles.length > 0 ? (
+                 // Swiper with articles
+                 <Swiper
+                   onSwiper={(swiper) => {
+                     swiperRef.current = swiper;
+                   }}
+                   slidesPerView="auto"
+                   spaceBetween={16}
+                   freeMode={{
+                     enabled: true,
+                     momentum: true,
+                     momentumRatio: 0.8,
+                     momentumVelocityRatio: 0.8,
+                   }}
+                   modules={[FreeMode, Navigation]}
+                   wrapperClass="px-2 py-2"
+                 >
+                   {articles.map((article) => (
+                     <SwiperSlide key={article.id} className="!w-80 max-w-[80vw]">
+                       <div 
+                         className={`h-full rounded-lg overflow-hidden transition-all transform hover:scale-[1.02] cursor-pointer ${
+                           selectedArticle?.id === article.id ? 'ring-4 ring-blue-500' : 'border border-gray-200'
+                         }`}
+                         onClick={() => handleSelectArticle(article)}
+                       >
+                         <div className="relative h-44 w-full">
+                           <Image
+                             src={article.imageUrl}
+                             alt={article.title}
+                             fill
+                             sizes="320px"
+                             className="object-cover"
+                             unoptimized={true}
+                             draggable="false"
+                           />
+                         </div>
+                         <div className="p-4 flex flex-col h-[calc(100%-11rem)]">
+                           <div className="min-h-[3.5rem]">
+                             <h4 className={`font-medium text-gray-900 mb-1 ${
+                               article.title.length > 60 
+                                 ? 'text-sm leading-tight' 
+                                 : article.title.length > 40 
+                                   ? 'text-base leading-tight' 
+                                   : 'text-lg'
+                             }`}>
+                               {article.title}
+                             </h4>
+                           </div>
+                           <div className="flex items-center mb-2">
+                             <span className="text-sm text-gray-600">
+                               {article.author} • {article.publication}
+                             </span>
+                           </div>
+                           <p className="text-gray-600 text-sm flex-grow overflow-hidden line-clamp-3">{article.summary}</p>
+                           <button 
+                             className="mt-3 text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                             onClick={(e) => {
+                               e.stopPropagation(); // Prevent article selection
+                               handleOpenArticle(article.sourceUrl);
+                             }}
+                           >
+                             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                             </svg>
+                             Read Original
+                           </button>
+                         </div>
+                       </div>
+                     </SwiperSlide>
+                   ))}
+                 </Swiper>
+               ) : (
+                 // No articles found
+                 <div className="bg-gray-50 rounded-lg p-8 text-center">
+                   <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+                   </svg>
+                   <h3 className="mt-2 text-lg font-medium text-gray-900">No articles found</h3>
+                   <p className="mt-1 text-gray-500">Try selecting a different topic or checking back later.</p>
+                 </div>
+               )}
+               
+               {/* Add shadow indicators for overflow content */}
+               <div className="absolute top-0 bottom-0 left-0 w-8 bg-gradient-to-r from-white to-transparent pointer-events-none z-10"></div>
+               <div className="absolute top-0 bottom-0 right-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none z-10"></div>
+             </div>
+           </div>
+           
+           {/* Selected Article Preview */}
+           {selectedArticle && (
+             <div className="mt-6 bg-white rounded-lg border border-blue-200 p-4 shadow-sm">
+               <div className="flex items-center justify-between mb-3">
+                 <h4 className="text-lg font-semibold text-blue-800">Selected Article</h4>
+                 <button 
+                   onClick={() => handleOpenArticle(selectedArticle.sourceUrl)}
+                   className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
+                 >
+                   <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                   </svg>
+                   Read Original
+                 </button>
+               </div>
+               <h3 className="text-xl text-gray-900 mb-2">{selectedArticle.title}</h3>
+               <div className="flex items-center mb-3 text-gray-600 text-sm">
+                 <span>By {selectedArticle.author}</span>
+                 <span className="mx-2">•</span>
+                 <span>{selectedArticle.publication}</span>
+               </div>
+               <div className="text-gray-700 mb-4 whitespace-pre-line">{selectedArticle.summary}</div>
+             </div>
+           )}
+         </div>
+       )}
+       { !isUrlInput && articleError && !isLoadingArticles && (
+         <div className="text-red-500 mt-2">{articleError}</div>
+       )}
+
+      {/* Step 3: Generate Posts Button */}
+      <div className="flex justify-center mt-6">
+        <button
+          onClick={handleGeneratePosts}
+          disabled={!canGenerate} // Updated disabled logic
+          className={`px-8 py-3 rounded-md text-white font-semibold transition duration-150 ease-in-out flex items-center justify-center space-x-2 ${
+            canGenerate ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-gray-400 cursor-not-allowed'
+          }`}
+        >
+          {isGenerating ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span>Generating...</span>
+            </>
+          ) : (
+            'Generate Posts'
           )}
-          
-          {/* Save Button */}
-          <button
-            onClick={handleSavePost}
-            className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2.5 px-4 rounded-md transition-colors"
-          >
-            Save to Dashboard
-          </button>
+        </button>
+      </div>
+
+      {/* Post generation loading skeleton */}
+      {isGenerating && generatedPosts.length === 0 && (
+        <div className="mt-8">
+          <div className="bg-white rounded-xl shadow-md border border-gray-100 max-w-2xl mx-auto animate-pulse">
+            {/* Post header skeleton */}
+            <div className="border-b px-4 py-2">
+              <div className="flex justify-between">
+                <div className="w-20 h-6 bg-gray-200 rounded"></div>
+                <div className="flex space-x-1">
+                  <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
+                  <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
+                  <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Profile header skeleton */}
+            <div className="p-4 flex items-center space-x-2">
+              <div className="h-12 w-12 bg-gray-200 rounded-full"></div>
+              <div className="space-y-2">
+                <div className="h-4 bg-gray-200 rounded w-32"></div>
+                <div className="h-3 bg-gray-200 rounded w-24"></div>
+              </div>
+            </div>
+            
+            {/* Post content skeleton */}
+            <div className="px-4 pb-4">
+              <div className="space-y-2">
+                <div className="h-4 bg-gray-200 rounded w-full"></div>
+                <div className="h-4 bg-gray-200 rounded w-full"></div>
+                <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+                <div className="h-4 bg-gray-200 rounded w-full"></div>
+                <div className="h-4 bg-gray-200 rounded w-4/5"></div>
+                <div className="h-4 bg-gray-200 rounded w-full"></div>
+                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+              </div>
+            </div>
+            
+            {/* Save button skeleton */}
+            <div className="border-t p-4">
+              <div className="h-10 bg-gray-200 rounded w-full"></div>
+            </div>
+          </div>
+          <div className="text-center mt-4 text-indigo-600 font-medium">{generatingStage}</div>
         </div>
       )}
-      
-      {/* Custom styling for Swiper */}
-      <style jsx global>{`
-        .swiper-slide {
-          height: auto;
+
+      {/* Step 4: Display Generated Posts */}
+      { generatedPosts.length > 0 && (
+         <div className="mt-8">
+           <div className="bg-white rounded-xl shadow-md border border-gray-100 max-w-2xl mx-auto">
+             {/* Post navigation and count */}
+             <div className="flex items-center justify-between border-b px-4 py-2">
+               <div className="flex items-center">
+                 <button
+                   onClick={handlePreviousPost}
+                   disabled={currentPostIndex === 0}
+                   className={`p-1 rounded-full ${
+                     currentPostIndex === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="Previous post"
+                 >
+                   <ChevronLeftIcon className="h-6 w-6" />
+                 </button>
+                 <span className="px-2 text-sm text-gray-600">
+                   {currentPostIndex + 1}/{generatedPosts.length}
+                 </span>
+                 <button
+                   onClick={handleNextPost}
+                   disabled={currentPostIndex === generatedPosts.length - 1}
+                   className={`p-1 rounded-full ${
+                     currentPostIndex === generatedPosts.length - 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="Next post"
+                 >
+                   <ChevronRightIcon className="h-6 w-6" />
+                 </button>
+               </div>
+               
+               {/* Edit and AI Edit controls */}
+               <div className="flex items-center space-x-1">
+                 {/* History navigation buttons */}
+                 <button
+                   onClick={handleUndo}
+                   disabled={!currentPostHistory || currentHistoryIndex <= 0}
+                   className={`p-1 rounded-full ${
+                     !currentPostHistory || currentHistoryIndex <= 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="Undo changes"
+                   title="Undo"
+                 >
+                   <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                   </svg>
+                 </button>
+                 
+                 <button
+                   onClick={handleRedo}
+                   disabled={!currentPostHistory || currentHistoryIndex >= currentPostHistory.length - 1}
+                   className={`p-1 rounded-full ${
+                     !currentPostHistory || currentHistoryIndex >= currentPostHistory.length - 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="Redo changes"
+                   title="Redo"
+                 >
+                   <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h-4v4m6 0H6a4 4 0 01-4-4V6a4 4 0 014-4h12a4 4 0 014 4v4a4 4 0 01-4 4h-1.5" transform="scale(-1, 1) translate(-24, 0)" />
+                   </svg>
+                 </button>
+                 
+                 {/* AI edit button */}
+                 <button
+                   onClick={toggleAiEdit}
+                   className={`p-1 rounded-full ${
+                     isAiEditOpen ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="AI Edit"
+                   title="AI Edit"
+                 >
+                   <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                   </svg>
+                 </button>
+                 
+                 {/* Edit button */}
+                 <button
+                   onClick={handleStartEditing}
+                   disabled={isEditing}
+                   className={`p-1 rounded-full ${
+                     isEditing ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
+                   }`}
+                   aria-label="Edit post"
+                   title="Edit"
+                 >
+                   <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                   </svg>
+                 </button>
+               </div>
+             </div>
+             
+             {/* AI Edit panel */}
+             {isAiEditOpen && (
+               <div className="p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border-b border-indigo-100 space-y-2">
+                 <div className="flex items-center space-x-2">
+                   <input
+                     type="text"
+                     value={aiEditText}
+                     onChange={(e) => setAiEditText(e.target.value)}
+                     placeholder={`${aiEditPlaceholders[placeholderIndex]}...`}
+                     className="flex-1 text-sm border border-indigo-200 p-2 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
+                     onKeyPress={(e) => {
+                       if (e.key === 'Enter' && aiEditText.trim()) {
+                         handleAiEdit();
+                       }
+                     }}
+                   />
+                   <button
+                     onClick={handleAiEdit}
+                     disabled={!aiEditText.trim() || isGenerating}
+                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+                   >
+                     {isGenerating ? (
+                       <>
+                         <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                         </svg>
+                         <span>Editing...</span>
+                       </>
+                     ) : (
+                       <>
+                         <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                         </svg>
+                         <span>Edit with AI</span>
+                       </>
+                     )}
+                   </button>
+                 </div>
+                 <div className="flex justify-between items-center">
+                   <div className="text-xs text-indigo-600">
+                     <svg className="h-3 w-3 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                     </svg>
+                     Try: "Add a call to action", "Remove hashtags", "Make more professional"
+                   </div>
+                   <div className="flex text-xs space-x-1">
+                     <span className="text-gray-600">Speed:</span>
+                     <div className="flex border border-indigo-200 rounded-md overflow-hidden">
+                       <button 
+                         onClick={() => setModelPreference('fastest')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'fastest' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Fastest
+                       </button>
+                       <button 
+                         onClick={() => setModelPreference('balanced')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'balanced' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Balanced
+                       </button>
+                       <button 
+                         onClick={() => setModelPreference('quality')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'quality' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Quality
+                       </button>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             )}
+             
+             {/* LinkedIn-style post */}
+             <div className="flex flex-col">
+               {/* Profile header */}
+               <div className="p-4 flex items-center space-x-2">
+                 {profileData.avatar_url ? (
+                   <Image
+                     src={profileData.avatar_url}
+                     alt="Profile"
+                     width={48}
+                     height={48}
+                     className="rounded-full object-cover border border-gray-200"
+                     unoptimized={true}
+                   />
+                 ) : (
+                   <UserCircleIcon className="h-12 w-12 text-gray-400" />
+                 )}
+                 <div>
+                   <div className="font-medium text-gray-900">{profileData.full_name}</div>
+                   <div className="text-sm text-gray-500">{profileData.job_title}</div>
+                 </div>
+               </div>
+               
+               {/* Post content */}
+               <div className="px-4 pb-4">
+                 {isEditing ? (
+                   // Editing mode - show textarea
+                   <textarea
+                     ref={textareaRef}
+                     value={editedPost}
+                     onChange={(e) => setEditedPost(e.target.value)}
+                     className="w-full border rounded-lg p-3 h-40 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                   />
+                 ) : isAnimatingEdit ? (
+                   // Animating edits - show with typing effect
+                   <div className="min-h-[100px] whitespace-pre-wrap break-words">
+                     {animatedText.split('\n').map((line, i, arr) => (
+                       <div key={i} className="relative leading-relaxed">
+                         <span className="fade-in text-gray-900">{line}</span>
+                         {i < arr.length - 1 && <br />}
+                       </div>
+                     ))}
+                     <span className="typing-cursor"></span>
+                   </div>
+                 ) : (
+                   // Normal view - show post content
+                   <div className="min-h-[100px] whitespace-pre-wrap break-words text-gray-900">
+                     {generatedPosts[currentPostIndex]?.split('\n').map((line, i, arr) => (
+                       <div key={i}>
+                         {line}
+                         {i < arr.length - 1 && <br />}
+                       </div>
+                     ))}
+                   </div>
+                 )}
+               </div>
+               
+               {/* Edit controls */}
+               {isEditing && (
+                 <div className="px-4 pb-4 flex justify-end space-x-2">
+                   <button
+                     onClick={handleCancelEdit}
+                     className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+                   >
+                     Cancel
+                   </button>
+                   <button
+                     onClick={handleSaveEdit}
+                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors"
+                   >
+                     Save
+                   </button>
+                 </div>
+               )}
+               
+               {/* Edit loading overlay */}
+               {isGenerating && (
+                 <div className="absolute inset-0 flex items-center justify-center bg-white/75 rounded-lg">
+                   <div className="text-center">
+                     <svg className="animate-spin h-10 w-10 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                     </svg>
+                     <p className="mt-2 text-indigo-700 font-medium">{aiEditingStage}</p>
+                   </div>
+                 </div>
+               )}
+               
+               {/* Save button */}
+               <div className="border-t p-4">
+                 <button
+                   onClick={handleSavePost}
+                   disabled={!generatedPosts[currentPostIndex]}
+                   className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                   Save to Dashboard
+                 </button>
+               </div>
+             </div>
+           </div>
+         </div>
+      )}
+
+      {/* Add CSS for typing animation */}
+      <style jsx>{`
+        .typing-cursor {
+          display: inline-block;
+          width: 2px;
+          height: 1.2em;
+          background-color: #000;
+          margin-left: 2px;
+          animation: blink 0.7s infinite;
+          vertical-align: middle;
         }
         
-        .swiper {
-          margin-left: 0;
-          margin-right: 0;
-          position: relative;
-          overflow: hidden;
-          list-style: none;
-          padding: 0;
-          z-index: 1;
-          width: 100%;
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
         }
         
-        .swiper-wrapper {
-          max-width: 100%;
-          height: 100%;
-          z-index: 1;
-          display: flex;
-          transition-property: transform;
-          box-sizing: content-box;
+        .fade-in {
+          animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0.7; }
+          to { opacity: 1; }
         }
       `}</style>
     </div>

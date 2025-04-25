@@ -49,6 +49,12 @@ The system integrates with Supabase for secure user authentication and data stor
    - Includes client-side check to redirect unauthenticated users.
    - Integrates with the PostGenerator component
    - Includes the `ProfileButton` component in its header/navigation area.
+   - Post management functionality:
+     - `handlePost`: Schedules individual posts and updates their status
+     - `handlePostAll`: Batch schedules all pending posts
+     - `handleEditPost`: Loads a post into the editor for modification
+     - `handleDeletePost`: Removes posts from the system
+     - `handleSaveCurrentPost`: Saves newly created/edited posts to the database
 
 2. **PostGenerator (src/components/PostGenerator.tsx)**
    - Form for industry, topic selection, article selection, and post generation triggering.
@@ -150,6 +156,63 @@ The system integrates with Supabase for secure user authentication and data stor
    - `Dashboard` component renders, uses `useSupabase` hook to get auth state.
    - If `user` is null after loading, it performs a client-side redirect to `/login` (redundant safety check).
 
+### Post Management Flow
+
+1. **Post Scheduling Flow**
+   - Individual Post Scheduling:
+     - User clicks the schedule button next to a post in the dashboard
+     - `handlePost` method is triggered with the post ID as a parameter
+     - UI shows a loading spinner within the post button during the process
+     - Simulated API call is made to the LinkedIn posting service
+     - On success, the post status is updated from 'scheduled' to 'posted'
+     - On failure, the post status is changed to 'failed'
+     - Post status visual indicator updates in real-time
+   
+   - Batch Post Scheduling:
+     - User clicks "Schedule All" button in the dashboard sidebar
+     - `handlePostAll` method processes all posts with 'scheduled' status
+     - Posts are processed sequentially with individual loading states
+     - Status updates are applied to each post upon completion
+     - User sees real-time feedback as each post is processed
+
+2. **Post Editing Flow**
+   - User clicks "Edit" on a post card in the dashboard
+   - `handleEditPost` method loads the post content into the post editor
+     - Sets the current post state with title, content, and image URL
+     - Scrolls the editor into view with smooth animation
+     - Shows a temporary notification confirming editing mode
+   - User makes changes to the post content or title
+   - Textarea automatically resizes to fit content as user types
+   - User can leverage AI editing feature for assistance
+   - User clicks "Post" to save changes
+   - `handleSaveCurrentPost` sends updated post to the server
+   - Updated post appears in the posts list with success notification
+
+3. **Post Deletion Flow**
+   - User clicks "Delete" on a post card
+   - `handleDeletePost` method shows a browser confirmation dialog
+   - If user confirms deletion:
+     - API request is sent to delete the post from the database
+     - Post is immediately removed from the UI for a responsive experience
+     - If the API call fails, an error message is displayed
+   - If user cancels, no action is taken
+
+4. **Post Creation and Saving Flow**
+   - User creates a new post via editor or uses AI-generated content
+   - User clicks "Post" button to save the content
+   - `handleSaveCurrentPost` method prepares post data:
+     - Adds current date/time for scheduling
+     - Sets initial 'scheduled' status
+     - Includes title, content, and optional image URL
+   - Post data is sent to the server via API
+   - On success:
+     - New post is added to the display posts list
+     - Success notification is briefly shown
+     - Editor is cleared for new content
+   - On failure:
+     - Error message is displayed
+     - User can retry the save operation
+
 ### Profile Management Flow
 
 1. User clicks the `ProfileButton` in the dashboard header.
@@ -168,11 +231,13 @@ The system integrates with Supabase for secure user authentication and data stor
 
 ### Post Generation Flow
 
-1. User enters an article link and selects a topic in the PostGenerator component
-2. User clicks "Generate Posts" button, triggering the handleGeneratePosts method
-3. handleGeneratePosts makes an API call (simulated in current implementation)
-4. Generated posts are stored in the generatedPosts state array
-5. First post is automatically selected (currentPostIndex = 0)
+1. User enters either a topic or a direct article URL into the main input field of the PostGenerator component.
+2. User clicks "Generate Posts" button, triggering the handleGeneratePosts method.
+3. handleGeneratePosts determines if the input is a URL or a topic:
+   - **If URL:** Makes an API call directly with the URL to fetch, summarize, and generate posts.
+   - **If Topic:** Makes an API call with the topic to search for articles, potentially allowing selection (if applicable based on final design), then fetch/summarize the chosen article and generate posts. (Current implementation might simulate parts of this).
+4. Generated posts are stored in the generatedPosts state array.
+5. First post is automatically selected (currentPostIndex = 0).
 
 ### Post Navigation Flow
 
@@ -210,6 +275,132 @@ The system integrates with Supabase for secure user authentication and data stor
 2. handleSavePost calls the onSavePost callback function with the current post
 3. The Dashboard component adds the post to its displayPosts array
 4. The post appears in the Dashboard UI with scheduled status
+
+## AI Edit Feature
+
+The AI Edit feature allows users to modify post content through natural language instructions, leveraging AI to transform and improve posts based on user guidance.
+
+### Feature Overview
+
+1. **Purpose and Functionality**
+   - Enables users to edit posts using natural language instructions (e.g., "Make more professional," "Add emojis")
+   - Maintains the core message while applying stylistic and tonal changes
+   - Provides a user-friendly interface for AI-powered content refinement
+   - Visualizes edits through animated transitions to show changes
+
+2. **User Experience Flow**
+   - User clicks the AI Edit button (lightning bolt icon) in the post editor
+   - An edit panel slides open with an input field for instructions
+   - User enters editing instructions (with rotating placeholder suggestions for guidance)
+   - User clicks "Edit with AI" button (or presses Enter)
+   - System displays loading states with rotating messages during processing
+   - Post content animates to show the transformation from original to edited version
+   - Edited content replaces the original post, and the edit is added to version history
+   - Edit panel closes to make the animation more visible
+
+3. **Component Integration**
+   - Implemented in both the Dashboard and PostGenerator components
+   - Shares core functionality but with independent state management
+   - Uses the same OpenAI API endpoints for consistent edit quality
+
+### Technical Implementation
+
+1. **State Management**
+   - `aiEditText`: Stores the user's editing instruction
+   - `isAiEditOpen`: Controls visibility of the edit panel
+   - `isEditingWithAi`: Tracks loading state during editing process
+   - `aiEditingStage`: Manages the animated loading message display
+   - `isAnimatingEdit`: Controls the text animation state
+   - `animatedText`: Stores transitional text during animation
+   - `modelPreference`: Allows user to select processing speed/quality tradeoff
+   - `placeholderIndex`: Manages rotation of suggestion placeholders
+
+2. **UI Components**
+   - Toggle button in post controls to show/hide the edit panel
+   - Gradient background panel with instruction input and submit button
+   - Model preference selector (Fastest/Balanced/Quality)
+   - Rotating placeholder suggestions to guide users
+   - Animated text display with fade-in effects and typing cursor
+
+3. **Edit Process Flow**
+   ```
+   handleAiEdit() -> 
+     validate input -> 
+     set loading state -> 
+     call OpenAI API -> 
+     receive edited content -> 
+     animate transition -> 
+     update post in state -> 
+     add to edit history
+   ```
+
+4. **Animation Implementation**
+   - The `animateTextChange()` function visualizes the transformation:
+     - Supports two animation types:
+       1. Word-level animation (with detailed diff information): Shows specific words being added/removed
+       2. Character-by-character animation (with basic diff): Shows backspacing and typing effects
+     - Uses setTimeout for staged animation effects
+     - Implements blinking cursor visual for realistic typing effect
+     - Supports manual handling of newlines and text positioning
+
+5. **API Integration**
+   - Calls to `/api/openai` endpoint with:
+     - `postContent`: Original post text
+     - `editInstruction`: User's editing instruction
+     - `modelPreference`: Speed vs. quality setting
+   - API returns:
+     - `editedPost`: Transformed content
+     - `diff`: Optional detailed change information to enhance animation
+
+6. **Version History Integration**
+   - Adds each AI edit as a new version in the post history
+   - Enables undo/redo functionality to navigate between versions
+   - Animations play when reverting to previous versions or redoing changes
+
+7. **Model Preferences**
+   - "Fastest": Prioritizes speed over quality for quick edits
+   - "Balanced": Moderate processing time with good quality results
+   - "Quality": Prioritizes edit quality with longer processing time
+
+8. **Fallback Mechanisms**
+   - Error handling for API failures
+   - Fallback text if API response is incomplete
+   - Timeout handling for long-running requests
+
+### Accessibility and UX Considerations
+
+1. **Accessibility Features**
+   - Keyboard navigation (Enter to submit)
+   - Loading state indicators
+   - Visual feedback during processing
+   - Clear visual distinction of the edit panel
+
+2. **User Guidance**
+   - Rotating placeholder suggestions to inspire edit ideas
+   - Example instructions shown below the input
+   - Clear button labeling and loading states
+   - Animated transitions to reinforce the effect of edits
+
+3. **Performance Optimizations**
+   - Debounced inputs to prevent excessive API calls
+   - Optimized animations for smooth transitions
+   - Automatic panel closing to focus on content changes
+   - Model preference options to adjust performance vs. quality
+
+### Future Enhancements
+
+1. **Planned Improvements**
+   - Preset edit buttons for common operations (e.g., "Shorten", "Add hashtags")
+   - API response caching for similar edit requests
+   - Advanced diff visualization with color-coding
+   - A/B comparison view of original vs. edited content
+   - Voice input for edit instructions
+
+2. **Integration Opportunities**
+   - Saved edit preferences tied to user profile
+   - Edit history analytics to track common edit patterns
+   - Learning system to suggest edits based on past preferences
+   - Integration with content guidelines and brand voice profiles
 
 ## Future Enhancements
 
@@ -264,12 +455,12 @@ The authentication system uses Supabase Auth with the following components:
 The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
 
 1. **Input Form**
-   - Article link input field
-   - Topic selection dropdown with trending topics
-   - Option to enter a custom topic
+   - Input field for Topic or Article URL: Accepts either a search topic (for article discovery) or a direct article URL.
+   - (Optional) Topic selection mechanism if the input is detected as a topic.
 
 2. **Post Generation**
-   - Sends article link and topic to backend
+   - Validates the input (detects if it's a URL or a topic).
+   - Sends the URL or topic to the backend API service.
    - Displays loading state during generation
    - Shows generated posts once available
 
@@ -373,12 +564,12 @@ The PostGenerator component is the core feature for generating LinkedIn posts. I
 The PostGenerator component is the core feature for generating LinkedIn posts. It provides:
 
 1. **Input Form**
-   - Article link input field
-   - Topic selection dropdown with trending topics
-   - Option to enter a custom topic
+   - Input field for Topic or Article URL: Accepts either a search topic (for article discovery) or a direct article URL.
+   - (Optional) Topic selection mechanism if the input is detected as a topic.
 
 2. **Post Generation**
-   - Sends article link and topic to backend
+   - Validates the input (detects if it's a URL or a topic).
+   - Sends the URL or topic to the backend API service.
    - Displays loading state during generation
    - Shows generated posts once available
 
@@ -450,3 +641,112 @@ The PostGenerator component is the core feature for generating LinkedIn posts. I
    - Comprehensive documentation
    - Centralized state management for authentication via `SupabaseProvider`.
    - Centralized state management for complex state 
+
+## LinkedIn Post Storage
+
+The LinkedIn Post Storage system enables the persistent storage of generated LinkedIn posts in Supabase, associating them with user accounts and allowing retrieval when users load their dashboard.
+
+### Feature Overview
+
+1. **Data Persistence**
+   - Posts are saved to the Supabase `linkedin_posts` table
+   - Each post is associated with the user who created it via a foreign key
+   - Posts can be retrieved when a user logs in and loads their dashboard
+   - Status tracking allows visibility into scheduled, posted, and failed posts
+
+2. **Database Schema**
+   - Table: `linkedin_posts`
+     - `id`: UUID (primary key, auto-generated)
+     - `user_id`: UUID (foreign key to auth.users)
+     - `title`: Text (post title or article title)
+     - `content`: Text (actual post content)
+     - `image_url`: Text (optional, for any images in the post)
+     - `scheduled_date`: Date (when the post is scheduled to be published)
+     - `scheduled_time`: Time (time of day for scheduled posts)
+     - `status`: Enum ('scheduled', 'posted', 'failed')
+     - `engagement`: JSONB (stores metrics like likes, comments, shares)
+     - `created_at`: Timestamp (when the post was created)
+     - `updated_at`: Timestamp (when the post was last updated)
+
+3. **Row Level Security (RLS)**
+   - Policies ensure users can only:
+     - Read their own posts: `SELECT` policy using `auth.uid() = user_id`
+     - Create posts for themselves: `INSERT` policy with check `auth.uid() = user_id`
+     - Update only their own posts: `UPDATE` policy using `auth.uid() = user_id`
+     - Delete only their own posts: `DELETE` policy using `auth.uid() = user_id`
+   - Index on `user_id` column for improved query performance
+   - Automatic `updated_at` timestamp management through a trigger
+
+4. **User Flow**
+   - User generates posts using the PostGenerator component
+   - User selects and saves a post to their dashboard
+   - The post is stored in Supabase with scheduled/draft status
+   - When the dashboard loads, all of the user's posts are retrieved and displayed
+
+### Technical Implementation
+
+1. **Save Post Process**
+   - When a user clicks "Post" button, the `handleSaveCurrentPost` method is called
+   - The method prepares post data with:
+     - Title and content from the editor
+     - Current date/time for scheduling information
+     - Initial 'scheduled' status
+     - Optional image URL if available
+   - Post data is sent to the server via `/api/posts` endpoint
+   - The endpoint inserts the post into the `linkedin_posts` table with the user's ID
+   - On successful save:
+     - New post is added to the display posts list for immediate visibility
+     - Success notification appears briefly to confirm the save
+     - Editor is cleared or reset for new content
+   - On failure:
+     - Error message is displayed
+     - User can retry the save operation
+
+2. **Fetch Posts Process**
+   - When the Dashboard component mounts, it fetches the user's posts
+   - A Supabase query filters posts by the current user's ID
+   - Posts are sorted by created date (newest first)
+   - The posts are displayed in the appropriate tabs based on status
+
+3. **API Integration**
+   - Server endpoints for CRUD operations:
+     - `POST /api/posts` - Create a new post
+     - `GET /api/posts` - Retrieve all posts for the current user
+     - `PATCH /api/posts/:id` - Update an existing post
+     - `DELETE /api/posts/:id` - Delete a post
+
+4. **Optimistic UI Updates**
+   - When saving a post, it's immediately added to the UI
+   - If the save fails, the UI is updated to reflect the error state
+   - This provides immediate feedback while the backend processes the request
+
+### Edge Cases and Error Handling
+
+1. **Network Failures**
+   - Temporary storage of posts if save fails due to network issues
+   - Retry mechanism for failed saves
+   - Appropriate error messaging to users
+
+2. **Data Validation**
+   - Server-side validation of post content and metadata
+   - Enforcement of maximum post length limits
+   - Prevention of duplicate posts within short time frames
+
+3. **Sync Issues**
+   - Handling of concurrent edits from multiple devices
+   - Timestamp-based conflict resolution
+   - Last-write-wins strategy for updates
+
+### Future Enhancements
+
+1. **Planned Improvements**
+   - Batch operations for multiple posts
+   - Scheduled publishing via automation
+   - Historical engagement tracking
+   - Advanced analytics on post performance
+
+2. **Integration Opportunities**
+   - Direct publishing to LinkedIn via API integration
+   - AI-powered recommendations for optimal posting times
+   - Content calendar visualization and management
+   - Cross-platform social media posting

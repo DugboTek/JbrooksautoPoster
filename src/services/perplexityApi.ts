@@ -9,25 +9,62 @@ import {
 
 /**
  * Makes a request to the Perplexity API through our proxy
+ * Supports both simple prompt strings and message arrays
  */
-async function callPerplexityAPI(messages: any[]) {
-  const response = await fetch('/api/perplexity', {
+async function callPerplexityAPI(input: string | any[]): Promise<any> {
+  // Construct the absolute URL for the API proxy route
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 
+                 (isDevelopment ? 'http://localhost:3000' : '');
+
+  if (!baseUrl && typeof window === 'undefined') {
+    console.error('Error: Base URL for API proxy is not configured. Set NEXT_PUBLIC_SITE_URL.');
+    throw new Error('Application base URL is not configured.');
+  }
+  
+  // Use absolute URL for server-side calls, relative URL for client-side
+  const apiUrl = typeof window === 'undefined' ? `${baseUrl}/api/perplexity` : '/api/perplexity';
+  
+  let requestBody;
+  
+  // Check if input is a string prompt or messages array
+  if (typeof input === 'string') {
+    requestBody = { prompt: input };
+  } else if (Array.isArray(input)) {
+    requestBody = {
+      model: 'sonar-pro',
+      messages: input
+    };
+  } else {
+    throw new Error('Invalid input to callPerplexityAPI: must be string or array');
+  }
+  
+  console.log('Calling Perplexity API with:', typeof input === 'string' ? 'prompt string' : 'messages array');
+  
+  const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: 'sonar-pro',
-      messages
-    })
+    body: JSON.stringify(requestBody)
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`API request failed: ${response.status} - ${JSON.stringify(error)}`);
+    try {
+      const error = await response.json();
+      throw new Error(`API request failed: ${response.status} - ${JSON.stringify(error)}`);
+    } catch (parseError) {
+      // If we can't parse the error as JSON, try to get it as text
+      const errorText = await response.text();
+      throw new Error(`API request failed: ${response.status} - ${errorText.substring(0, 500)}`);
+    }
   }
 
-  return response.json();
+  const data = await response.json();
+  
+  // If response includes data.response, it's from the simple prompt format
+  // Otherwise return the full data object from the messages format
+  return data.response ? data.response : data;
 }
 
 /**
@@ -35,7 +72,15 @@ async function callPerplexityAPI(messages: any[]) {
  */
 async function refreshPrompts(): Promise<void> {
   try {
-    const response = await fetch('/api/prompts/update', { 
+    // Construct the absolute URL for the API route
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 
+                   (isDevelopment ? 'http://localhost:3000' : '');
+    
+    // Use absolute URL for server-side calls, relative URL for client-side
+    const apiUrl = typeof window === 'undefined' ? `${baseUrl}/api/prompts/update` : '/api/prompts/update';
+    
+    const response = await fetch(apiUrl, { 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -81,7 +126,8 @@ export async function fetchIndustryTopics(industry: string): Promise<Topic[]> {
   try {
     console.log('Making API call with query:', query);
     
-    const data = await callPerplexityAPI([
+    // Create the messages array for the Perplexity API
+    const messages = [
       {
         role: 'system',
         content: SYSTEM_MESSAGES.JSON_ASSISTANT
@@ -90,10 +136,22 @@ export async function fetchIndustryTopics(industry: string): Promise<Topic[]> {
         role: 'user',
         content: query
       }
-    ]);
-
-    // Extract the content from the API response
-    const content = data.choices[0]?.message?.content;
+    ];
+    
+    // Call the Perplexity API
+    const data = await callPerplexityAPI(messages);
+    
+    // Extract the content from the API response based on response format
+    let content;
+    if (typeof data === 'string') {
+      content = data;
+    } else if (data.choices && data.choices[0]?.message?.content) {
+      content = data.choices[0].message.content;
+    } else {
+      console.error('Unexpected API response format:', data);
+      throw new Error('Invalid response format from API');
+    }
+    
     if (!content) {
       console.error('No content in API response:', data);
       throw new Error('No content returned from API');
@@ -151,7 +209,8 @@ export async function fetchArticlesByTopic(topic: string): Promise<Article[]> {
   try {
     console.log('Making API call with query:', query);
     
-    const data = await callPerplexityAPI([
+    // Create the messages array for the Perplexity API
+    const messages = [
       {
         role: 'system',
         content: SYSTEM_MESSAGES.ARTICLE_RESEARCHER
@@ -160,10 +219,22 @@ export async function fetchArticlesByTopic(topic: string): Promise<Article[]> {
         role: 'user',
         content: query
       }
-    ]);
-
-    // Extract the content from the API response
-    const content = data.choices[0]?.message?.content;
+    ];
+    
+    // Call the Perplexity API
+    const data = await callPerplexityAPI(messages);
+    
+    // Extract the content from the API response based on response format
+    let content;
+    if (typeof data === 'string') {
+      content = data;
+    } else if (data.choices && data.choices[0]?.message?.content) {
+      content = data.choices[0].message.content;
+    } else {
+      console.error('Unexpected API response format:', data);
+      throw new Error('Invalid response format from API');
+    }
+    
     if (!content) {
       console.error('No content in API response:', data);
       throw new Error('No content returned from API');
@@ -229,7 +300,8 @@ export async function generatePostsWithClaude(
 
     console.log('Making API call with prompt');
     
-    const data = await callPerplexityAPI([
+    // Create the messages array for the Perplexity API
+    const messages = [
       {
         role: 'system',
         content: SYSTEM_MESSAGES.LINKEDIN_WRITER
@@ -238,10 +310,24 @@ export async function generatePostsWithClaude(
         role: 'user',
         content: prompt
       }
-    ]);
+    ];
+    
+    // Call the Perplexity API
+    const data = await callPerplexityAPI(messages);
+    console.log('Received API response data type:', typeof data);
 
     // Extract the content from the API response
-    const content = data.choices[0]?.message?.content;
+    // Different handling based on whether we get a direct response string or a structured message
+    let content;
+    if (typeof data === 'string') {
+      content = data;
+    } else if (data.choices && data.choices[0]?.message?.content) {
+      content = data.choices[0].message.content;
+    } else {
+      console.error('Unexpected API response format:', data);
+      throw new Error('Invalid response format from API');
+    }
+    
     if (!content) {
       console.error('No content in API response:', data);
       throw new Error('No content returned from API');
