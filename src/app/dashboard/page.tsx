@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import PostGenerator from '@/components/PostGenerator';
 import ProfileButton from '@/components/ProfileButton';
@@ -114,8 +114,8 @@ export default function Dashboard() {
   const [showSuccessNotification, setShowSuccessNotification] = useState(false);
   const [showEditingNotification, setShowEditingNotification] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generationPrompt, setGenerationPrompt] = useState('');
-  const [showPromptInput, setShowPromptInput] = useState(false);
+  // REMOVED: const [generationPrompt, setGenerationPrompt] = useState('');
+  // REMOVED: const [showPromptInput, setShowPromptInput] = useState(false);
   
   // Restore multi-post generation functionality
   const [generatedPosts, setGeneratedPosts] = useState<string[]>([]);
@@ -153,6 +153,7 @@ export default function Dashboard() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   
   const editorRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const swiperRef = useRef<any>(null);
   const { user, isLoading: isAuthLoading, signOut, supabase } = useSupabase();
   const router = useRouter();
@@ -166,6 +167,285 @@ export default function Dashboard() {
   // Debounce search topic for URL inputs
   const debouncedSearchTopic = useDebounce(searchTopic, 800);
   
+  // AI editor related states (Copied from PostGenerator)
+  const [aiEditText, setAiEditText] = useState('');
+  const [isAiEditOpen, setIsAiEditOpen] = useState(false);
+  const [isEditingWithAi, setIsEditingWithAi] = useState(false); // Renamed from isGenerating in PostGenerator to avoid conflict
+  const [isAnimatingEdit, setIsAnimatingEdit] = useState(false);
+  const [animatedText, setAnimatedText] = useState('');
+  const [aiEditingStage, setAiEditingStage] = useState('Applying edits...');
+  const [modelPreference, setModelPreference] = useState<'fastest' | 'balanced' | 'quality'>('fastest');
+  const aiEditPlaceholders = [
+    'Make more professional',
+    'Remove hashtags',
+    'Make it more concise',
+    'Add emojis',
+    'Sound more enthusiastic',
+    'Add a call to action',
+    'Make it more personal',
+    'Simplify language'
+  ];
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+
+  // Add auto-resize function for textarea
+  const autoResizeTextarea = () => {
+    if (textareaRef.current) {
+      // Reset height to auto to get the correct scrollHeight
+      textareaRef.current.style.height = 'auto';
+      // Set the height to scrollHeight to fit all content
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  };
+
+  // Add this effect to rotate through placeholder suggestions
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPlaceholderIndex((prevIndex) => (prevIndex + 1) % aiEditPlaceholders.length);
+    }, 3000); // Change the placeholder every 3 seconds
+    
+    return () => clearInterval(interval);
+  }, [aiEditPlaceholders.length]);
+
+  // Add this effect to cycle through AI editing loading messages
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    
+    if (isEditingWithAi) {
+      const loadingMessages = [
+        'Applying edits...',
+        'Refining content...',
+        'Enhancing post...',
+        'Making improvements...',
+        'Optimizing message...',
+        'Polishing language...',
+        'Updating content...'
+      ];
+      
+      let currentIndex = 0;
+      
+      interval = setInterval(() => {
+        currentIndex = (currentIndex + 1) % loadingMessages.length;
+        setAiEditingStage(loadingMessages[currentIndex]);
+      }, 2000); // Change message every 2 seconds
+    }
+    
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+        setAiEditingStage('Applying edits...'); // Reset to default when done
+      }
+    };
+  }, [isEditingWithAi]); // Use the new state variable
+
+  // Add effect to resize textarea whenever content changes
+  useEffect(() => {
+    if (currentPost?.content) {
+      autoResizeTextarea();
+    }
+  }, [currentPost?.content]);
+
+  // Toggle AI edit panel (Copied from PostGenerator)
+  const toggleAiEdit = () => {
+    setIsAiEditOpen(!isAiEditOpen);
+  };
+
+  // Function to animate the text transition between old and new versions with granular diff visualization (Copied from PostGenerator, adjusted for currentPost)
+  const animateTextChange = (oldText: string, newText: string, diff?: {
+    added: {text: string, index: number}[];
+    removed: {text: string, index: number}[];
+    changes?: { type: string, text: string }[];
+  }) => {
+    setIsAnimatingEdit(true);
+    setAnimatedText(oldText);
+
+    // If we have detailed changes, use them for word-level animation
+    if (diff?.changes && diff.changes.length > 0) {
+      // Start with original text
+      let finalText = '';
+      let currentText = '';
+      let animationSteps: { action: 'add' | 'remove' | 'keep', text: string }[] = [];
+
+      // Process changes to build animation steps
+      diff.changes.forEach(change => {
+        if (change.type === 'keep') {
+          finalText += change.text;
+          currentText += change.text;
+          animationSteps.push({ action: 'keep', text: change.text });
+        } else if (change.type === 'remove') {
+          // For removals, we'll animate the text being deleted
+          currentText += change.text;
+          animationSteps.push({ action: 'remove', text: change.text });
+        } else if (change.type === 'add') {
+          // For additions, we'll animate the text being added
+          finalText += change.text;
+          animationSteps.push({ action: 'add', text: change.text });
+        }
+      });
+
+      // Create a sequence of operations
+      const performAnimation = async () => {
+        // First set the starting text (with all text that will be removed)
+        setAnimatedText(currentText);
+
+        // Wait a moment before starting animation
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Process each animation step
+        for (let i = 0; i < animationSteps.length; i++) {
+          const step = animationSteps[i];
+
+          if (step.action === 'remove') {
+            // Animate removal word by word
+            const textToRemove = step.text;
+            let currentAnimText = currentText;
+
+            // Find position of text to remove
+            const removeIndex = currentAnimText.indexOf(textToRemove);
+            if (removeIndex >= 0) {
+              // Remove the text
+              currentText = currentAnimText.substring(0, removeIndex) +
+                           currentAnimText.substring(removeIndex + textToRemove.length);
+
+              // Update animation
+              setAnimatedText(currentText);
+
+              // Pause briefly after removal
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } else if (step.action === 'add') {
+            // Animate addition word by word
+            const textToAdd = step.text;
+
+            // Find where to add the text (after the previous content)
+            const addIndex = currentText.length;
+
+            // Add the text
+            currentText = currentText.substring(0, addIndex) + textToAdd;
+
+            // Update animation
+            setAnimatedText(currentText);
+
+            // Pause briefly after addition
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+        }
+
+        // Complete animation
+        setAnimatedText(newText);
+        setIsAnimatingEdit(false);
+
+        // Update the post
+        if (currentPost) {
+          setCurrentPost({
+            ...currentPost,
+            content: newText
+          });
+        }
+      };
+
+      // Start the animation
+      performAnimation();
+    } else {
+      // Fallback to simple animation if no diff is provided
+      // Find the common prefix between the two strings
+      let commonPrefixLength = 0;
+      const minLength = Math.min(oldText.length, newText.length);
+
+      while (commonPrefixLength < minLength &&
+             oldText[commonPrefixLength] === newText[commonPrefixLength]) {
+        commonPrefixLength++;
+      }
+
+      // Calculate what needs to be backspaced and what needs to be typed
+      const backspaceLength = oldText.length - commonPrefixLength;
+      const newTextToType = newText.substring(commonPrefixLength);
+
+      // Current text state
+      let currentText = oldText;
+      let backspaceStep = 0;
+      let typeStep = 0;
+
+      // Backspace animation
+      const backspaceInterval = setInterval(() => {
+        if (backspaceStep < backspaceLength) {
+          currentText = currentText.slice(0, -1);
+          setAnimatedText(currentText);
+          backspaceStep++;
+        } else {
+          clearInterval(backspaceInterval);
+
+          // Start typing animation after backspacing is complete
+          const typeInterval = setInterval(() => {
+            if (typeStep < newTextToType.length) {
+              currentText += newTextToType[typeStep];
+              setAnimatedText(currentText);
+              typeStep++;
+            } else {
+              clearInterval(typeInterval);
+              setIsAnimatingEdit(false);
+              // Update the post
+              if (currentPost) {
+                setCurrentPost({
+                  ...currentPost,
+                  content: newText
+                });
+              }
+            }
+          }, 25); // Typing speed
+        }
+      }, 15); // Backspacing speed
+    }
+  };
+
+  // Handle AI edit submission (Copied from PostGenerator, adjusted for currentPost)
+  const handleAiEdit = async () => {
+    if (!aiEditText.trim() || !currentPost?.content) return;
+
+    setIsEditingWithAi(true); // Use the new state variable
+
+    try {
+      // Call OpenAI API to edit the post
+      const response = await fetch('/api/openai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          postContent: currentPost.content,
+          editInstruction: aiEditText,
+          modelPreference: modelPreference
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('OpenAI API error:', errorData);
+        throw new Error(`API request failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.editedPost) {
+        throw new Error('No edited content returned from API');
+      }
+
+      // Start animation between old text and new text, passing diff if available
+      animateTextChange(currentPost.content, data.editedPost, data.diff);
+
+      // Reset the input
+      setAiEditText('');
+
+      // Close AI edit panel to make animation more visible
+      setIsAiEditOpen(false);
+    } catch (error) {
+      console.error('Error editing post:', error);
+      // Show error message
+      alert('Failed to edit post. Please try again.');
+    } finally {
+      setIsEditingWithAi(false); // Use the new state variable
+    }
+  };
+
   useEffect(() => {
     // Clear any redirect flags
     localStorage.removeItem('pendingRedirect');
@@ -265,50 +545,58 @@ export default function Dashboard() {
   
   // Effect to cycle through loading messages for articles
   useEffect(() => {
-    if (!isLoadingArticles) return;
+    let interval: NodeJS.Timeout | null = null;
     
-    const loadingMessages = [
-      'Searching for articles...',
-      'Finding relevant content...',
-      'Reading articles...',
-      'Analyzing information...',
-      'Summarizing content...',
-      'Almost there...'
-    ];
-    
-    let currentIndex = 0;
-    const interval = setInterval(() => {
-      currentIndex = (currentIndex + 1) % loadingMessages.length;
-      setLoadingStage(loadingMessages[currentIndex]);
-    }, 3000);
+    if (isLoadingArticles) {
+      const loadingMessages = [
+        'Searching for articles...',
+        'Finding relevant content...',
+        'Reading articles...',
+        'Analyzing information...',
+        'Summarizing content...',
+        'Almost there...'
+      ];
+      
+      let currentIndex = 0;
+      interval = setInterval(() => {
+        currentIndex = (currentIndex + 1) % loadingMessages.length;
+        setLoadingStage(loadingMessages[currentIndex]);
+      }, 3000);
+    }
     
     return () => {
-      clearInterval(interval);
-      setLoadingStage('Searching for articles...');
+      if (interval) {
+        clearInterval(interval);
+        setLoadingStage('Searching for articles...');
+      }
     };
   }, [isLoadingArticles]);
   
   // Effect to cycle through topic generation loading messages
   useEffect(() => {
-    if (!isLoadingTopics) return;
+    let interval: NodeJS.Timeout | null = null;
     
-    const loadingMessages = [
-      'Generating topics...',
-      'Analyzing industry trends...',
-      'Finding relevant topics...',
-      'Organizing industry insights...',
-      'Curating trending topics...'
-    ];
-    
-    let currentIndex = 0;
-    const interval = setInterval(() => {
-      currentIndex = (currentIndex + 1) % loadingMessages.length;
-      setTopicLoadingStage(loadingMessages[currentIndex]);
-    }, 3000);
+    if (isLoadingTopics) {
+      const loadingMessages = [
+        'Generating topics...',
+        'Analyzing industry trends...',
+        'Finding relevant topics...',
+        'Organizing industry insights...',
+        'Curating trending topics...'
+      ];
+      
+      let currentIndex = 0;
+      interval = setInterval(() => {
+        currentIndex = (currentIndex + 1) % loadingMessages.length;
+        setTopicLoadingStage(loadingMessages[currentIndex]);
+      }, 3000);
+    }
     
     return () => {
-      clearInterval(interval);
-      setTopicLoadingStage('Generating topics...');
+      if (interval) {
+        clearInterval(interval);
+        setTopicLoadingStage('Generating topics...');
+      }
     };
   }, [isLoadingTopics]);
 
@@ -412,12 +700,29 @@ export default function Dashboard() {
       
       setGeneratedPosts(posts);
       
-      // Set the first post as current
+      // Set the first post as current - WITHOUT the image
       setCurrentPost({
         title: article.title,
-        content: posts[0],
-        imageUrl: article.imageUrl
+        content: posts[0]
       });
+      
+      // Show success toast notification
+      const successToast = document.createElement('div');
+      successToast.className = 'fixed bottom-5 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center z-50';
+      successToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span><strong>${posts.length} posts</strong> generated! Use the arrows to browse them.</span>
+      `;
+      document.body.appendChild(successToast);
+      
+      // Remove toast after 3 seconds
+      setTimeout(() => {
+        if (successToast.parentNode) {
+          successToast.parentNode.removeChild(successToast);
+        }
+      }, 3000);
       
     } catch (error) {
       console.error('Error generating posts with Perplexity API:', error);
@@ -436,58 +741,55 @@ export default function Dashboard() {
       
       setGeneratedPosts(fallbackPosts);
       
-      // Set the first fallback post as current
+      // Set the first fallback post as current - without image
       setCurrentPost({
         title: article.title,
-        content: fallbackPosts[0],
-        imageUrl: article.imageUrl
+        content: fallbackPosts[0]
       });
     } finally {
       setIsGenerating(false);
     }
   };
   
-  // Navigate to the previous post
+  // Navigate to the previous post - define with if check inside
   const handlePreviousPost = () => {
     if (currentPostIndex > 0 && generatedPosts.length > 0) {
       const newIndex = currentPostIndex - 1;
       setCurrentPostIndex(newIndex);
       
       // Update the current post content
-      setCurrentPost(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
+      if (currentPost) {
+        setCurrentPost({
+          ...currentPost,
           content: generatedPosts[newIndex]
-        };
-      });
+        });
+      }
     }
   };
   
-  // Navigate to the next post
+  // Navigate to the next post - define with if check inside
   const handleNextPost = () => {
     if (currentPostIndex < generatedPosts.length - 1) {
       const newIndex = currentPostIndex + 1;
       setCurrentPostIndex(newIndex);
       
       // Update the current post content
-      setCurrentPost(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
+      if (currentPost) {
+        setCurrentPost({
+          ...currentPost,
           content: generatedPosts[newIndex]
-        };
-      });
+        });
+      }
     }
   };
   
   // Open article in a new tab
-  const handleOpenArticle = (url: string) => {
+  const handleOpenArticle = useCallback((url: string) => {
     window.open(url, '_blank', 'noopener,noreferrer');
-  };
+  }, []);
   
   // Fetch article summary for a URL
-  const fetchUrlSummary = async (url: string) => {
+  const fetchUrlSummary = useCallback(async (url: string) => {
     if (!isValidUrl(url)) return;
     
     setIsLoadingUrlSummary(true);
@@ -518,164 +820,78 @@ export default function Dashboard() {
     } finally {
       setIsLoadingUrlSummary(false);
     }
-  };
+  }, []);
 
-  if (isLoading || isAuthLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F3F2EF]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
+  // Add keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't interfere if user is typing in input or textarea
+      if (
+        document.activeElement?.tagName === 'INPUT' || 
+        document.activeElement?.tagName === 'TEXTAREA'
+      ) {
+        return;
+      }
+
+      // Use the handlers which have their own condition checks inside
+      if (e.key === 'ArrowLeft') {
+        handlePreviousPost();
+      } else if (e.key === 'ArrowRight') {
+        handleNextPost();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
   
-  // Add dummy functions for post handling
-  const handlePost = (postId: string) => {
-    setPostingStates(prev => ({
-      ...prev,
-      [postId]: true
-    }));
-    
-    // Simulate posting process
-    setTimeout(() => {
-      setPostingStates(prev => ({
-        ...prev,
-        [postId]: false
+  // ... existing code ...
+
+  // Fetch saved posts from Supabase
+  const fetchPosts = async () => {
+    try {
+      const response = await fetch('/api/posts');
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch posts: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Transform the posts to match the expected format
+      const transformedPosts = data.posts.map((post: any) => ({
+        id: post.id,
+        title: post.title,
+        content: post.content,
+        imageUrl: post.image_url,
+        scheduledDate: post.scheduled_date,
+        scheduledTime: post.scheduled_time,
+        status: post.status,
+        engagement: post.engagement
       }));
-    }, 2000);
-  };
-  
-  const handlePostAll = () => {
-    setPostingAll(true);
-    
-    // Simulate posting all process
-    setTimeout(() => {
-      setPostingAll(false);
-    }, 3000);
+      
+      setDisplayPosts(transformedPosts);
+    } catch (error) {
+      console.error('Error fetching posts:', error);
+      // You might want to show an error notification to the user
+    }
   };
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-  };
+  // Add useEffect to fetch posts when component mounts
+  useEffect(() => {
+    if (user) {
+      fetchPosts();
+    }
+  }, [user]);
 
+  // Toggle schedule buttons
   const toggleScheduleButtons = () => {
     setShowScheduleButtons(prev => !prev);
   };
 
-  // Handle direct post writing in the editor
-  const handlePostContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    if (currentPost) {
-      setCurrentPost({
-        ...currentPost,
-        content: e.target.value
-      });
-    } else {
-      setCurrentPost({
-        content: e.target.value,
-        title: 'New Post'
-      });
-    }
-  };
-
-  // Handle post title change
-  const handlePostTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (currentPost) {
-      setCurrentPost({
-        ...currentPost,
-        title: e.target.value
-      });
-    }
-  };
-
-  // Select a post for editing
-  const handleEditPost = (post: Post) => {
-    setCurrentPost({
-      content: post.content,
-      title: post.title,
-      imageUrl: post.imageUrl
-    });
-    
-    // Scroll to the editor section
-    setTimeout(() => {
-      if (editorRef.current) {
-        editorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
-    
-    // Show a brief "Editing post" notification
-    setShowEditingNotification(true);
-    setTimeout(() => {
-      setShowEditingNotification(false);
-    }, 1500);
-  };
-
-  // Create a new blank post
-  const handleNewPost = () => {
-    setCurrentPost({
-      content: '',
-      title: 'New Post'
-    });
-  };
-
-  // Save the current post being edited
-  const handleSaveCurrentPost = () => {
-    if (!currentPost || !currentPost.content.trim()) return;
-    
-    const newPost: Post = {
-      id: `gen-${Date.now()}`,
-      title: currentPost.title || 'New Post',
-      content: currentPost.content,
-      imageUrl: currentPost.imageUrl,
-      scheduledDate: new Date().toISOString().split('T')[0],
-      scheduledTime: new Date().toTimeString().split(' ')[0].substring(0, 5),
-      status: 'scheduled',
-    };
-    
-    setDisplayPosts([newPost, ...displayPosts]);
-    setCurrentPost(null);
-    
-    // Show success notification instead of alert
-    setShowSuccessNotification(true);
-    
-    // Hide notification after 2 seconds
-    setTimeout(() => {
-      setShowSuccessNotification(false);
-    }, 2000);
-  };
-
-  // Handle AI post generation
-  const handleGeneratePost = async () => {
-    if (!generationPrompt.trim()) return;
-    
-    setIsGenerating(true);
-    
-    try {
-      // In a real app, you would call an API to generate the content
-      // For now, we'll simulate a delay and use a placeholder response
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Simulated generated post
-      const generatedContent = `This is a generated post based on your prompt: "${generationPrompt}"\n\nHere's some additional content that would be generated by AI to help you get started with your LinkedIn post.`;
-      
-      setCurrentPost({
-        title: 'Generated Post',
-        content: generatedContent
-      });
-      
-      setShowPromptInput(false);
-      setGenerationPrompt('');
-    } catch (error) {
-      console.error('Error generating post:', error);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Toggle prompt input
-  const togglePromptInput = () => {
-    setShowPromptInput(prev => !prev);
-  };
-  
-  // Scroll articles container using buttons (now for vertical scrolling)
+  // Scroll articles container using buttons
   const scrollArticles = (direction: 'left' | 'right') => {
     // Find the articles container element
     const articlesContainer = document.querySelector('.flex-grow.overflow-y-auto.max-h-\\[480px\\]');
@@ -692,7 +908,220 @@ export default function Dashboard() {
       articlesContainer.scrollBy({ top: scrollAmount, behavior: 'smooth' });
     }
   };
-  
+
+  // Handle tab change
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+  };
+
+  // Create a new blank post
+  const handleNewPost = () => {
+    setCurrentPost({
+      content: '',
+      title: 'New Post'
+    });
+  };
+
+  // Handle post title change
+  const handlePostTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (currentPost) {
+      setCurrentPost({
+        ...currentPost,
+        title: e.target.value
+      });
+    }
+  };
+
+  // Handle post content change
+  const handlePostContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (currentPost) {
+      setCurrentPost({
+        ...currentPost,
+        content: e.target.value
+      });
+    } else {
+      setCurrentPost({
+        content: e.target.value,
+        title: 'New Post'
+      });
+    }
+    
+    // Resize textarea on each change
+    setTimeout(autoResizeTextarea, 0);
+  };
+
+  // Save the current post being edited
+  const handleSaveCurrentPost = async () => {
+    if (!currentPost || !currentPost.content.trim()) return;
+    
+    try {
+      // Prepare the post data
+      const postData = {
+        title: currentPost.title || 'New Post',
+        content: currentPost.content,
+        scheduledDate: new Date().toISOString().split('T')[0], // Today's date
+        scheduledTime: new Date().toTimeString().split(' ')[0].substring(0, 5), // Current time
+        status: 'scheduled'
+      };
+      
+      // Send the post to the API
+      const response = await fetch('/api/posts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(postData),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to save post: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Add the saved post to the display posts with the returned ID
+      setDisplayPosts([{
+        id: data.post.id,
+        title: data.post.title,
+        content: data.post.content,
+        imageUrl: data.post.image_url,
+        scheduledDate: data.post.scheduled_date,
+        scheduledTime: data.post.scheduled_time,
+        status: data.post.status,
+        engagement: data.post.engagement
+      }, ...displayPosts]);
+      
+      setCurrentPost(null);
+      
+      // Show success notification
+      setShowSuccessNotification(true);
+      
+      // Hide notification after 2 seconds
+      setTimeout(() => {
+        setShowSuccessNotification(false);
+      }, 2000);
+    } catch (error) {
+      console.error('Error saving post:', error);
+      // Show error notification to user
+      alert('Failed to save post. Please try again.');
+    }
+  };
+
+  // Function to handle posting all scheduled posts
+  const handlePostAll = async () => {
+    if (postingAll) return;
+    
+    setPostingAll(true);
+    try {
+      // Loop through all display posts with scheduled status
+      const scheduledPosts = displayPosts.filter(post => post.status === 'scheduled');
+      
+      for (const post of scheduledPosts) {
+        // Update individual post state
+        setPostingStates(prev => ({ ...prev, [post.id]: true }));
+        
+        // Simulate API call to post to LinkedIn
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Update post status
+        const updatedPosts = displayPosts.map(p => {
+          if (p.id === post.id) {
+            return { ...p, status: 'posted' as const };
+          }
+          return p;
+        });
+        
+        setDisplayPosts(updatedPosts as Post[]);
+        
+        // Reset individual post state
+        setPostingStates(prev => ({ ...prev, [post.id]: false }));
+      }
+    } catch (error) {
+      console.error('Error posting all:', error);
+    } finally {
+      setPostingAll(false);
+    }
+  };
+
+  // Function to handle posting a single post
+  const handlePost = async (postId: string) => {
+    if (postingStates[postId]) return;
+    
+    setPostingStates(prev => ({ ...prev, [postId]: true }));
+    
+    try {
+      // Simulate API call to post to LinkedIn
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Update post status in the UI
+      const updatedPosts = displayPosts.map(post => {
+        if (post.id === postId) {
+          return { ...post, status: 'posted' as const };
+        }
+        return post;
+      });
+      
+      setDisplayPosts(updatedPosts as Post[]);
+    } catch (error) {
+      console.error('Error posting:', error);
+      // Update to failed status if there's an error
+      const updatedPosts = displayPosts.map(post => {
+        if (post.id === postId) {
+          return { ...post, status: 'failed' as const };
+        }
+        return post;
+      });
+      
+      setDisplayPosts(updatedPosts as Post[]);
+    } finally {
+      setPostingStates(prev => ({ ...prev, [postId]: false }));
+    }
+  };
+
+  // Function to handle editing a post
+  const handleEditPost = (post: Post) => {
+    setCurrentPost({
+      title: post.title,
+      content: post.content,
+      imageUrl: post.imageUrl
+    });
+    
+    // Scroll to editor
+    if (editorRef.current) {
+      editorRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    // Show editing notification
+    setShowEditingNotification(true);
+    
+    // Hide notification after 2 seconds
+    setTimeout(() => {
+      setShowEditingNotification(false);
+    }, 2000);
+  };
+
+  // Function to handle deleting a post
+  const handleDeletePost = async (postId: string) => {
+    if (!confirm('Are you sure you want to delete this post?')) return;
+    
+    try {
+      // Call API to delete post
+      const response = await fetch(`/api/posts/${postId}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to delete post: ${response.status}`);
+      }
+      
+      // Remove post from UI
+      setDisplayPosts(displayPosts.filter(post => post.id !== postId));
+    } catch (error) {
+      console.error('Error deleting post:', error);
+      alert('Failed to delete post. Please try again.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#F3F2EF]">
       <header className="bg-white shadow">
@@ -1187,36 +1616,76 @@ export default function Dashboard() {
                     </div>
                   </div>
                   
-                  {/* Post Navigation */}
+                  {/* Enhanced Post Navigation */}
                   {generatedPosts.length > 1 && (
-                    <div className="flex items-center space-x-2">
-                      <button 
-                        onClick={handlePreviousPost}
-                        disabled={currentPostIndex === 0}
-                        className={`p-1 rounded-full ${
-                          currentPostIndex === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
-                        }`}
-                        aria-label="Previous post"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                        </svg>
-                      </button>
-                      <span className="text-sm text-gray-600">
-                        {currentPostIndex + 1}/{generatedPosts.length}
-                      </span>
-                      <button
-                        onClick={handleNextPost}
-                        disabled={currentPostIndex === generatedPosts.length - 1}
-                        className={`p-1 rounded-full ${
-                          currentPostIndex === generatedPosts.length - 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'
-                        }`}
-                        aria-label="Next post"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </button>
+                    <div className="flex flex-col items-end">
+                      <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-1">
+                        <span className="text-sm text-blue-700 font-medium">
+                          {generatedPosts.length} posts generated!
+                        </span>
+                      </div>
+                      <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg p-1">
+                        <button
+                          onClick={handlePreviousPost}
+                          disabled={currentPostIndex === 0}
+                          className={`p-2 rounded-md ${
+                            currentPostIndex === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                          aria-label="Previous post"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                          <span className="sr-only">Previous (Left Arrow)</span>
+                        </button>
+                        
+                        {/* Post Indicators */}
+                        <div className="flex space-x-1 px-2">
+                          {generatedPosts.map((_, idx) => (
+                            <button 
+                              key={idx}
+                              onClick={() => {
+                                setCurrentPostIndex(idx);
+                                setCurrentPost(prev => {
+                                  if (!prev) return null;
+                                  return {
+                                    ...prev,
+                                    content: generatedPosts[idx]
+                                  };
+                                });
+                              }}
+                              className={`w-6 h-6 flex items-center justify-center text-xs font-medium rounded-full ${
+                                idx === currentPostIndex
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                              }`}
+                            >
+                              {idx + 1}
+                            </button>
+                          ))}
+                        </div>
+                        
+                        <button
+                          onClick={handleNextPost}
+                          disabled={currentPostIndex === generatedPosts.length - 1}
+                          className={`p-2 rounded-md ${
+                            currentPostIndex === generatedPosts.length - 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                          aria-label="Next post"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                          <span className="sr-only">Next (Right Arrow)</span>
+                        </button>
+                      </div>
+                      
+                      {/* Keyboard shortcut hint */}
+                      <div className="text-xs text-gray-500 mt-1 flex items-center justify-end">
+                        <span className="mr-1">Navigate with</span>
+                        <kbd className="px-1.5 py-0.5 bg-gray-200 border border-gray-300 rounded text-gray-600 font-mono text-xs mr-1">←</kbd>
+                        <kbd className="px-1.5 py-0.5 bg-gray-200 border border-gray-300 rounded text-gray-600 font-mono text-xs">→</kbd>
+                      </div>
                     </div>
                   )}
                   
@@ -1252,53 +1721,9 @@ export default function Dashboard() {
                     
                     {/* Post Content Area */}
                     <div className="flex-1 space-y-4">
-                      {/* AI Prompt Input (conditionally shown) */}
-                      {showPromptInput && (
-                        <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
-                          <label className="block text-sm font-medium text-blue-700 mb-1">
-                            What would you like to post about?
-                          </label>
-                          <div className="flex">
-                            <input
-                              type="text"
-                              value={generationPrompt}
-                              onChange={(e) => setGenerationPrompt(e.target.value)}
-                              placeholder="E.g., Share insights about digital marketing trends"
-                              className="flex-1 p-2 border border-blue-300 rounded-l-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            />
-                            <button
-                              onClick={handleGeneratePost}
-                              disabled={isGenerating || !generationPrompt.trim()}
-                              className={`px-4 py-2 rounded-r-md font-medium flex items-center ${
-                                isGenerating || !generationPrompt.trim()
-                                  ? 'bg-blue-300 text-blue-100 cursor-not-allowed'
-                                  : 'bg-blue-600 text-white hover:bg-blue-700'
-                              }`}
-                            >
-                              {isGenerating ? (
-                                <>
-                                  <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                  </svg>
-                                  Generating...
-                                </>
-                              ) : (
-                                'Generate'
-                              )}
-                            </button>
-                          </div>
-                          <div className="mt-2 flex justify-end">
-                            <button
-                              onClick={() => setShowPromptInput(false)}
-                              className="text-sm text-blue-600 hover:text-blue-800"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      
+                      {/* AI Prompt Input (conditionally shown) - REMOVE THIS BLOCK */}
+                      {/* {showPromptInput && ( ... )} */}
+
                       {/* Input Fields */}
                       <div>
                         <input
@@ -1314,18 +1739,130 @@ export default function Dashboard() {
                           }}
                         />
                         
-                        <textarea
-                          value={currentPost?.content || ''}
-                          onChange={handlePostContentChange}
-                          rows={6}
-                          className="w-full mt-2 px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none min-h-[120px]"
-                          placeholder="What do you want to talk about?"
-                          onClick={() => {
-                            if (!currentPost) {
-                              handleNewPost();
-                            }
-                          }}
-                        />
+                        {/* Post Content Area with Navigation Indicators */}
+                        <div className="relative">
+                          {generatedPosts.length > 1 && (
+                            <div className="absolute -top-1 left-0 right-0 flex justify-center">
+                              <div className="bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1 rounded-b-lg border border-blue-100 border-t-0">
+                                Post {currentPostIndex + 1} of {generatedPosts.length}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {isAnimatingEdit ? (
+                            // Animating edits - show with typing effect
+                            <div className="min-h-[120px] whitespace-pre-wrap break-words border border-gray-200 rounded-md p-3 mt-2">
+                              {animatedText.split('\n').map((line, i, arr) => (
+                                <div key={i} className="relative leading-relaxed">
+                                  <span className="fade-in text-gray-900">{line}</span>
+                                  {i < arr.length - 1 && <br />}
+                                </div>
+                              ))}
+                              <span className="typing-cursor"></span>
+                            </div>
+                          ) : (
+                            // Normal textarea view
+                            <textarea
+                              ref={textareaRef}
+                              value={currentPost?.content || ''}
+                              onChange={handlePostContentChange}
+                              className={`w-full mt-2 px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none min-h-[120px] overflow-hidden ${
+                                generatedPosts.length > 1 ? 'pt-6' : ''
+                              }`}
+                              placeholder="What do you want to talk about?"
+                              onClick={() => {
+                                if (!currentPost) {
+                                  handleNewPost();
+                                }
+                              }}
+                            />
+                          )}
+                          
+                          {/* AI Edit panel */}
+                          {isAiEditOpen && (
+                            <div className="p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-lg space-y-2 mt-2">
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="text"
+                                  value={aiEditText}
+                                  onChange={(e) => setAiEditText(e.target.value)}
+                                  placeholder={`${aiEditPlaceholders[placeholderIndex]}...`}
+                                  className="flex-1 text-sm border border-indigo-200 p-2 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-400"
+                                  onKeyPress={(e) => {
+                                    if (e.key === 'Enter' && aiEditText.trim()) {
+                                      handleAiEdit();
+                                    }
+                                  }}
+                                />
+                                <button
+                                  onClick={handleAiEdit}
+                                  disabled={!aiEditText.trim() || isEditingWithAi}
+                                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+                                >
+                                  {isEditingWithAi ? ( // Use new state variable
+                                    <>
+                                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                      </svg>
+                                      <span>{aiEditingStage}</span>
+                                    </> 
+                                  ) : (
+                                    <>
+                                      <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                                      </svg>
+                                      <span>Edit with AI</span>
+                                    </> 
+                                  )}
+                                </button>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <div className="text-xs text-indigo-600">
+                                  <svg className="h-3 w-3 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Try: "Add a call to action", "Remove hashtags", "Make more professional"
+                                </div>
+                                <div className="flex text-xs space-x-1 items-center">
+                                  <span className="text-gray-600">Model:</span>
+                                  <div className="flex border border-indigo-200 rounded-md overflow-hidden">
+                                    <button 
+                                      onClick={() => setModelPreference('fastest')}
+                                      className={`px-2 py-0.5 text-xs ${
+                                        modelPreference === 'fastest'
+                                          ? 'bg-indigo-600 text-white'
+                                          : 'text-indigo-600 hover:bg-indigo-50'
+                                      }`}
+                                    >
+                                      Fastest
+                                    </button>
+                                    <button 
+                                      onClick={() => setModelPreference('balanced')}
+                                      className={`px-2 py-0.5 text-xs ${
+                                        modelPreference === 'balanced'
+                                          ? 'bg-indigo-600 text-white'
+                                          : 'text-indigo-600 hover:bg-indigo-50'
+                                      }`}
+                                    >
+                                      Balanced
+                                    </button>
+                                    <button 
+                                      onClick={() => setModelPreference('quality')}
+                                      className={`px-2 py-0.5 text-xs ${
+                                        modelPreference === 'quality'
+                                          ? 'bg-indigo-600 text-white'
+                                          : 'text-indigo-600 hover:bg-indigo-50'
+                                      }`}
+                                    >
+                                      Quality
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Image Preview (if any) */}
@@ -1385,12 +1922,14 @@ export default function Dashboard() {
                           
                           {/* AI Generate */}
                           <button 
-                            className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-full transition-colors"
-                            onClick={togglePromptInput}
-                            disabled={isGenerating}
+                            className={`p-2 rounded-full transition-colors ${
+                              isAiEditOpen ? 'bg-indigo-100 text-indigo-700' : 'text-blue-600 hover:text-blue-700 hover:bg-blue-50'
+                            }`}
+                            onClick={toggleAiEdit} // <-- Corrected: Use toggleAiEdit
+                            title="Edit with AI"
                           >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                             </svg>
                           </button>
                         </div>
@@ -1671,7 +2210,7 @@ export default function Dashboard() {
                                 >
                                   Edit
                                 </button>
-                                <button className="text-sm text-red-500 hover:text-red-700">Delete</button>
+                                <button className="text-sm text-red-500 hover:text-red-700" onClick={() => handleDeletePost(post.id)}>Delete</button>
                               </div>
                             </div>
                           </div>
@@ -1741,6 +2280,53 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Add CSS for typing animation (Copied from PostGenerator) */}
+      <style jsx>{`
+        .typing-cursor {
+          display: inline-block;
+          width: 2px;
+          height: 1.2em;
+          background-color: #000;
+          margin-left: 2px;
+          animation: blink 0.7s infinite;
+          vertical-align: middle;
+        }
+
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+
+        .fade-in {
+          animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0.7; }
+          to { opacity: 1; }
+        }
+
+        /* Animation for AI Edit Panel (Optional: Add if needed) */
+        .ai-edit-panel-enter {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        .ai-edit-panel-enter-active {
+          opacity: 1;
+          transform: translateY(0);
+          transition: opacity 300ms, transform 300ms;
+        }
+        .ai-edit-panel-exit {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        .ai-edit-panel-exit-active {
+          opacity: 0;
+          transform: translateY(10px);
+          transition: opacity 300ms, transform 300ms;
+        }
+      `}</style>
     </div>
   )
 }

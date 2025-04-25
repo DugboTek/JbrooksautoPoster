@@ -132,7 +132,7 @@ const FALLBACK_GENERATED_POSTS = [
 ];
 
 interface PostGeneratorProps {
-  onSavePost?: (post: string) => void;
+  onSavePost?: (post: string, title?: string, imageUrl?: string) => void;
 }
 
 // Helper function to validate URL
@@ -625,7 +625,11 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
   // Save the current post to the dashboard
   const handleSavePost = () => {
     if (onSavePost && generatedPosts.length > 0) {
-      onSavePost(generatedPosts[currentPostIndex]);
+      // Pass only the post content and title, NOT the image URL
+      const postContent = generatedPosts[currentPostIndex];
+      const postTitle = selectedArticle?.title || '';
+      
+      onSavePost(postContent, postTitle);
     }
   };
   
@@ -783,55 +787,232 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
     };
   }, [isGenerating]);
   
-  // Function to animate the text transition between old and new versions
-  const animateTextChange = (oldText: string, newText: string) => {
+  // Function to animate the text transition between old and new versions with granular diff visualization
+  const animateTextChange = (oldText: string, newText: string, diff?: { 
+    added: {text: string, index: number}[]; 
+    removed: {text: string, index: number}[];
+    changes?: { type: string, text: string }[];
+  }) => {
     setIsAnimatingEdit(true);
     setAnimatedText(oldText);
 
-    // Find the common prefix between the two strings
-    let commonPrefixLength = 0;
-    const minLength = Math.min(oldText.length, newText.length);
-    
-    while (commonPrefixLength < minLength && 
-           oldText[commonPrefixLength] === newText[commonPrefixLength]) {
-      commonPrefixLength++;
-    }
-    
-    // Calculate what needs to be backspaced and what needs to be typed
-    const backspaceLength = oldText.length - commonPrefixLength;
-    const newTextToType = newText.substring(commonPrefixLength);
-    
-    // Current text state
-    let currentText = oldText;
-    let backspaceStep = 0;
-    let typeStep = 0;
-    
-    // Backspace animation
-    const backspaceInterval = setInterval(() => {
-      if (backspaceStep < backspaceLength) {
-        currentText = currentText.slice(0, -1);
+    // If we have detailed changes, use them for word-level animation
+    if (diff?.changes && diff.changes.length > 0) {
+      // Start with original text
+      let finalText = '';
+      let currentText = '';
+      let animationSteps: { action: 'add' | 'remove' | 'keep', text: string }[] = [];
+      
+      // Process changes to build animation steps
+      diff.changes.forEach(change => {
+        if (change.type === 'keep') {
+          finalText += change.text;
+          currentText += change.text;
+          animationSteps.push({ action: 'keep', text: change.text });
+        } else if (change.type === 'remove') {
+          // For removals, we'll animate the text being deleted
+          currentText += change.text;
+          animationSteps.push({ action: 'remove', text: change.text });
+        } else if (change.type === 'add') {
+          // For additions, we'll animate the text being added
+          finalText += change.text;
+          animationSteps.push({ action: 'add', text: change.text });
+        }
+      });
+      
+      // Create a sequence of operations
+      const performAnimation = async () => {
+        // First set the starting text (with all text that will be removed)
         setAnimatedText(currentText);
-        backspaceStep++;
-      } else {
-        clearInterval(backspaceInterval);
         
-        // Start typing animation after backspacing is complete
-        const typeInterval = setInterval(() => {
-          if (typeStep < newTextToType.length) {
-            currentText += newTextToType[typeStep];
+        // Wait a moment before starting animation
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Process each animation step
+        for (let i = 0; i < animationSteps.length; i++) {
+          const step = animationSteps[i];
+          
+          if (step.action === 'remove') {
+            // Animate removal word by word
+            const textToRemove = step.text;
+            let currentAnimText = currentText;
+            
+            // Find position of text to remove
+            const removeIndex = currentAnimText.indexOf(textToRemove);
+            if (removeIndex >= 0) {
+              // Remove the text
+              currentText = currentAnimText.substring(0, removeIndex) + 
+                           currentAnimText.substring(removeIndex + textToRemove.length);
+              
+              // Update animation
+              setAnimatedText(currentText);
+              
+              // Pause briefly after removal
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } else if (step.action === 'add') {
+            // Animate addition word by word
+            const textToAdd = step.text;
+            
+            // Find where to add the text (after the previous content)
+            const addIndex = currentText.length;
+            
+            // Add the text
+            currentText = currentText.substring(0, addIndex) + textToAdd;
+            
+            // Update animation
             setAnimatedText(currentText);
-            typeStep++;
-          } else {
-            clearInterval(typeInterval);
-            setIsAnimatingEdit(false);
-            // Update the actual post after animation completes
-            const newPosts = [...generatedPosts];
-            newPosts[currentPostIndex] = newText;
-            setGeneratedPosts(newPosts);
+            
+            // Pause briefly after addition
+            await new Promise(resolve => setTimeout(resolve, 150));
           }
-        }, 25); // Typing speed
+        }
+        
+        // Complete animation
+        setAnimatedText(newText);
+        setIsAnimatingEdit(false);
+        
+        // Update the actual post
+        const newPosts = [...generatedPosts];
+        newPosts[currentPostIndex] = newText;
+        setGeneratedPosts(newPosts);
+      };
+      
+      // Start the animation
+      performAnimation();
+    }
+    // If we have diff information (but not detailed changes), use it for character-level animation
+    else if (diff && diff.added.length > 0 && diff.removed.length > 0) {
+      // Start with original text
+      let currentText = oldText;
+      let currentPosition = 0;
+      
+      // Create array of animation steps
+      const animationSteps: {type: 'remove' | 'add', text: string, index: number}[] = [];
+      
+      // Add removal steps first
+      diff.removed.forEach(removal => {
+        animationSteps.push({
+          type: 'remove',
+          text: removal.text,
+          index: removal.index
+        });
+      });
+      
+      // Then add addition steps
+      diff.added.forEach(addition => {
+        animationSteps.push({
+          type: 'add',
+          text: addition.text,
+          index: addition.index
+        });
+      });
+      
+      // Sort steps by index for proper sequence
+      animationSteps.sort((a, b) => a.index - b.index);
+      
+      // Execute each animation step with delay
+      let stepIndex = 0;
+      
+      const executeAnimationStep = () => {
+        if (stepIndex >= animationSteps.length) {
+          // Animation complete
+          setIsAnimatingEdit(false);
+          // Update the actual post after animation completes
+          const newPosts = [...generatedPosts];
+          newPosts[currentPostIndex] = newText;
+          setGeneratedPosts(newPosts);
+          return;
+        }
+        
+        const step = animationSteps[stepIndex];
+        
+        if (step.type === 'remove') {
+          // Animate removal character by character
+          let charIndex = 0;
+          const removeInterval = setInterval(() => {
+            if (charIndex >= step.text.length) {
+              clearInterval(removeInterval);
+              stepIndex++;
+              setTimeout(executeAnimationStep, 100); // Short pause between steps
+              return;
+            }
+            
+            // Remove one character at a time
+            const removeIndex = step.index + charIndex;
+            currentText = currentText.substring(0, removeIndex) + currentText.substring(removeIndex + 1);
+            setAnimatedText(currentText);
+            charIndex++;
+          }, 15); // Fast removal
+        } else {
+          // Animate addition character by character
+          let charIndex = 0;
+          const addInterval = setInterval(() => {
+            if (charIndex >= step.text.length) {
+              clearInterval(addInterval);
+              stepIndex++;
+              setTimeout(executeAnimationStep, 100); // Short pause between steps
+              return;
+            }
+            
+            // Add one character at a time
+            const addIndex = step.index + charIndex;
+            currentText = currentText.substring(0, addIndex) + step.text[charIndex] + currentText.substring(addIndex);
+            setAnimatedText(currentText);
+            charIndex++;
+          }, 25); // Slightly slower addition for readability
+        }
+      };
+      
+      // Start the animation sequence
+      executeAnimationStep();
+    } else {
+      // Fallback to simple animation if no diff is provided
+      // Find the common prefix between the two strings
+      let commonPrefixLength = 0;
+      const minLength = Math.min(oldText.length, newText.length);
+      
+      while (commonPrefixLength < minLength && 
+             oldText[commonPrefixLength] === newText[commonPrefixLength]) {
+        commonPrefixLength++;
       }
-    }, 15); // Backspacing speed
+      
+      // Calculate what needs to be backspaced and what needs to be typed
+      const backspaceLength = oldText.length - commonPrefixLength;
+      const newTextToType = newText.substring(commonPrefixLength);
+      
+      // Current text state
+      let currentText = oldText;
+      let backspaceStep = 0;
+      let typeStep = 0;
+      
+      // Backspace animation
+      const backspaceInterval = setInterval(() => {
+        if (backspaceStep < backspaceLength) {
+          currentText = currentText.slice(0, -1);
+          setAnimatedText(currentText);
+          backspaceStep++;
+        } else {
+          clearInterval(backspaceInterval);
+          
+          // Start typing animation after backspacing is complete
+          const typeInterval = setInterval(() => {
+            if (typeStep < newTextToType.length) {
+              currentText += newTextToType[typeStep];
+              setAnimatedText(currentText);
+              typeStep++;
+            } else {
+              clearInterval(typeInterval);
+              setIsAnimatingEdit(false);
+              // Update the actual post after animation completes
+              const newPosts = [...generatedPosts];
+              newPosts[currentPostIndex] = newText;
+              setGeneratedPosts(newPosts);
+            }
+          }, 25); // Typing speed
+        }
+      }, 15); // Backspacing speed
+    }
   };
   
   // Handle AI edit submission
@@ -849,7 +1030,8 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
         },
         body: JSON.stringify({
           postContent: generatedPosts[currentPostIndex],
-          editInstruction: aiEditText
+          editInstruction: aiEditText,
+          modelPreference: modelPreference
         })
       });
 
@@ -865,14 +1047,17 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
         throw new Error('No edited content returned from API');
       }
 
-      // Start animation between old text and new text
-      animateTextChange(generatedPosts[currentPostIndex], data.editedPost);
+      // Start animation between old text and new text, passing diff if available
+      animateTextChange(generatedPosts[currentPostIndex], data.editedPost, data.diff);
       
       // Add this edit to history after animation
       addToHistory(data.editedPost);
       
       // Reset the input
       setAiEditText('');
+      
+      // Close AI edit panel to make animation more visible
+      setIsAiEditOpen(false);
     } catch (error) {
       console.error('Error editing post:', error);
       // Fallback to basic editing if API fails
@@ -926,6 +1111,9 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
       setIsLoadingUrlSummary(false);
     }
   };
+  
+  // Add a new state for model preference
+  const [modelPreference, setModelPreference] = useState<'fastest' | 'balanced' | 'quality'>('fastest');
   
   return (
     <div className="p-6 bg-white rounded-lg shadow-lg space-y-6 max-w-4xl mx-auto">
@@ -1487,11 +1675,48 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
                      )}
                    </button>
                  </div>
-                 <div className="text-xs text-indigo-600">
-                   <svg className="h-3 w-3 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                   </svg>
-                   Try: "Add a call to action", "Remove hashtags", "Make more professional"
+                 <div className="flex justify-between items-center">
+                   <div className="text-xs text-indigo-600">
+                     <svg className="h-3 w-3 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                     </svg>
+                     Try: "Add a call to action", "Remove hashtags", "Make more professional"
+                   </div>
+                   <div className="flex text-xs space-x-1">
+                     <span className="text-gray-600">Speed:</span>
+                     <div className="flex border border-indigo-200 rounded-md overflow-hidden">
+                       <button 
+                         onClick={() => setModelPreference('fastest')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'fastest' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Fastest
+                       </button>
+                       <button 
+                         onClick={() => setModelPreference('balanced')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'balanced' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Balanced
+                       </button>
+                       <button 
+                         onClick={() => setModelPreference('quality')}
+                         className={`px-2 py-0.5 text-xs ${
+                           modelPreference === 'quality' 
+                             ? 'bg-indigo-600 text-white' 
+                             : 'text-indigo-600 hover:bg-indigo-50'
+                         }`}
+                       >
+                         Quality
+                       </button>
+                     </div>
+                   </div>
                  </div>
                </div>
              )}
@@ -1499,82 +1724,131 @@ export default function PostGenerator({ onSavePost }: PostGeneratorProps) {
              {/* LinkedIn-style post */}
              <div className="flex flex-col">
                {/* Profile header */}
-               <div className="flex items-center space-x-2 p-4">
-                 <div className="h-12 w-12 rounded-full overflow-hidden flex-shrink-0 bg-gray-200">
-                   {profileData.avatar_url ? (
-                     <Image
-                       src={profileData.avatar_url}
-                       alt="Profile"
-                       width={48}
-                       height={48}
-                       className="h-full w-full object-cover"
-                       unoptimized={true}
-                     />
-                   ) : (
-                     <UserCircleIcon className="h-12 w-12 text-gray-400" />
-                   )}
-                 </div>
+               <div className="p-4 flex items-center space-x-2">
+                 {profileData.avatar_url ? (
+                   <Image
+                     src={profileData.avatar_url}
+                     alt="Profile"
+                     width={48}
+                     height={48}
+                     className="rounded-full object-cover border border-gray-200"
+                     unoptimized={true}
+                   />
+                 ) : (
+                   <UserCircleIcon className="h-12 w-12 text-gray-400" />
+                 )}
                  <div>
-                   <h3 className="font-medium text-gray-900">{profileData.full_name}</h3>
-                   <p className="text-sm text-gray-500">{profileData.job_title}</p>
+                   <div className="font-medium text-gray-900">{profileData.full_name}</div>
+                   <div className="text-sm text-gray-500">{profileData.job_title}</div>
                  </div>
                </div>
                
-               {/* Post content area */}
+               {/* Post content */}
                <div className="px-4 pb-4">
                  {isEditing ? (
-                   // Edit mode
-                   <div className="space-y-3">
-                     <textarea
-                       ref={textareaRef}
-                       value={editedPost}
-                       onChange={(e) => setEditedPost(e.target.value)}
-                       className="w-full min-h-[200px] p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                       placeholder="Edit your post..."
-                     />
-                     <div className="flex justify-end space-x-2">
-                       <button
-                         onClick={handleCancelEdit}
-                         className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
-                       >
-                         Cancel
-                       </button>
-                       <button
-                         onClick={handleSaveEdit}
-                         className="px-4 py-2 bg-blue-600 rounded-md text-white hover:bg-blue-700 transition-colors"
-                       >
-                         Save
-                       </button>
-                     </div>
+                   // Editing mode - show textarea
+                   <textarea
+                     ref={textareaRef}
+                     value={editedPost}
+                     onChange={(e) => setEditedPost(e.target.value)}
+                     className="w-full border rounded-lg p-3 h-40 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                   />
+                 ) : isAnimatingEdit ? (
+                   // Animating edits - show with typing effect
+                   <div className="min-h-[100px] whitespace-pre-wrap break-words">
+                     {animatedText.split('\n').map((line, i, arr) => (
+                       <div key={i} className="relative leading-relaxed">
+                         <span className="fade-in text-gray-900">{line}</span>
+                         {i < arr.length - 1 && <br />}
+                       </div>
+                     ))}
+                     <span className="typing-cursor"></span>
                    </div>
                  ) : (
-                   // Display mode
-                   <div>
-                     {isAnimatingEdit ? (
-                       <div className="relative min-h-[200px] whitespace-pre-wrap">
-                         <p className="text-gray-800">{animatedText}</p>
-                         <span className="animate-blink border-r-2 border-blue-500 ml-1 h-5 absolute inline-block" style={{ marginTop: '-2px' }}></span>
+                   // Normal view - show post content
+                   <div className="min-h-[100px] whitespace-pre-wrap break-words text-gray-900">
+                     {generatedPosts[currentPostIndex]?.split('\n').map((line, i, arr) => (
+                       <div key={i}>
+                         {line}
+                         {i < arr.length - 1 && <br />}
                        </div>
-                     ) : (
-                       <p className="text-gray-800 whitespace-pre-wrap">{generatedPosts[currentPostIndex]}</p>
-                     )}
+                     ))}
                    </div>
                  )}
                </div>
-             </div>
-             
-             {/* Save post button */}
-             <div className="border-t p-4">
-               <button
-                 onClick={handleSavePost}
-                 className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
-               >
-                 Save to Dashboard
-               </button>
+               
+               {/* Edit controls */}
+               {isEditing && (
+                 <div className="px-4 pb-4 flex justify-end space-x-2">
+                   <button
+                     onClick={handleCancelEdit}
+                     className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+                   >
+                     Cancel
+                   </button>
+                   <button
+                     onClick={handleSaveEdit}
+                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors"
+                   >
+                     Save
+                   </button>
+                 </div>
+               )}
+               
+               {/* Edit loading overlay */}
+               {isGenerating && (
+                 <div className="absolute inset-0 flex items-center justify-center bg-white/75 rounded-lg">
+                   <div className="text-center">
+                     <svg className="animate-spin h-10 w-10 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                     </svg>
+                     <p className="mt-2 text-indigo-700 font-medium">{aiEditingStage}</p>
+                   </div>
+                 </div>
+               )}
+               
+               {/* Save button */}
+               <div className="border-t p-4">
+                 <button
+                   onClick={handleSavePost}
+                   disabled={!generatedPosts[currentPostIndex]}
+                   className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                   Save to Dashboard
+                 </button>
+               </div>
              </div>
            </div>
          </div>
       )}
+
+      {/* Add CSS for typing animation */}
+      <style jsx>{`
+        .typing-cursor {
+          display: inline-block;
+          width: 2px;
+          height: 1.2em;
+          background-color: #000;
+          margin-left: 2px;
+          animation: blink 0.7s infinite;
+          vertical-align: middle;
+        }
+        
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+        
+        .fade-in {
+          animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0.7; }
+          to { opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 } 
